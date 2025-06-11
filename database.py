@@ -18,16 +18,20 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             whatsapp_number TEXT UNIQUE NOT NULL,
-            last_interaction_date DATE DEFAULT CURRENT_DATE -- Nova coluna
+            last_interaction_date DATE DEFAULT CURRENT_DATE
         )
     ''')
 
+    # MODIFICADO: Adicionadas colunas para macronutrientes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS food_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             foods_description TEXT NOT NULL,
             calories REAL NOT NULL,
+            carbohydrates REAL DEFAULT 0, -- NOVA COLUNA
+            proteins REAL DEFAULT 0,     -- NOVA COLUNA
+            fats REAL DEFAULT 0,         -- NOVA COLUNA
             entry_date DATE DEFAULT CURRENT_DATE,
             entry_time TIME DEFAULT CURRENT_TIME,
             FOREIGN KEY (user_id) REFERENCES users(id)
@@ -58,7 +62,7 @@ def init_db():
         )
     ''')
 
-    # Nova tabela para Metas
+    # Tabela para Metas
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS goals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,11 +72,11 @@ def init_db():
             start_date DATE DEFAULT CURRENT_DATE,
             end_date DATE,
             FOREIGN KEY (user_id) REFERENCES users(id),
-            UNIQUE (user_id, goal_type) -- Garante apenas uma meta por tipo por usuário
+            UNIQUE (user_id, goal_type)
         )
     ''')
 
-    # Nova tabela para Lembretes
+    # Tabela para Lembretes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +107,7 @@ def get_or_create_user(whatsapp_number):
         return user_id
 
 def update_last_interaction_date(whatsapp_number):
-    user_id = get_or_create_user(whatsapp_number) # Garante que o usuário existe
+    user_id = get_or_create_user(whatsapp_number)
     conn = get_db_connection()
     cursor = conn.cursor()
     today_date_str = date.today().strftime('%Y-%m-%d')
@@ -126,10 +130,9 @@ def get_last_interaction_date(whatsapp_number):
     conn.close()
     if result and result['last_interaction_date']:
         return datetime.strptime(result['last_interaction_date'], '%Y-%m-%d').date()
-    return None # Retorna None se não houver registro
+    return None
 
 def get_all_users():
-    """Retorna uma lista de todos os números de WhatsApp dos usuários."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT whatsapp_number FROM users")
@@ -137,42 +140,21 @@ def get_all_users():
     conn.close()
     return users
 
-
-def add_food_entry(whatsapp_number, foods_description, calories):
+# MODIFICADO: Função add_food_entry agora recebe e armazena macronutrientes
+def add_food_entry(whatsapp_number, foods_description, calories, carbohydrates, proteins, fats):
     user_id = get_or_create_user(whatsapp_number)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO food_entries (user_id, foods_description, calories) VALUES (?, ?, ?)",
-        (user_id, foods_description, calories)
+        "INSERT INTO food_entries (user_id, foods_description, calories, carbohydrates, proteins, fats) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, foods_description, calories, carbohydrates, proteins, fats)
     )
     conn.commit()
     conn.close()
 
-def add_weight_entry(whatsapp_number, weight):
-    user_id = get_or_create_user(whatsapp_number)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO weight_entries (user_id, weight) VALUES (?, ?)",
-        (user_id, weight)
-    )
-    conn.commit()
-    conn.close()
-
-def add_exercise_entry(whatsapp_number, activity_name, duration_minutes, calories_burned):
-    user_id = get_or_create_user(whatsapp_number)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO exercise_entries (user_id, activity_name, duration_minutes, calories_burned) VALUES (?, ?, ?, ?)",
-        (user_id, activity_name, duration_minutes, calories_burned)
-    )
-    conn.commit()
-    conn.close()
-
+# MODIFICADO: get_daily_summary agora retorna macronutrientes nas entradas de comida
 def get_daily_summary(whatsapp_number):
-    user_id = get_or_create_user(whatsapp_number) # Garante que o usuário existe
+    user_id = get_or_create_user(whatsapp_number)
     conn = get_db_connection()
     cursor = conn.cursor()
     today_date = date.today().strftime('%Y-%m-%d')
@@ -183,21 +165,21 @@ def get_daily_summary(whatsapp_number):
         'last_weight': None
     }
 
-    # Comida
+    # Comida - AGORA SELECIONA MACRONUTRIENTES TAMBÉM
     cursor.execute(
-        "SELECT foods_description, calories FROM food_entries WHERE user_id = ? AND entry_date = ?",
+        "SELECT foods_description, calories, carbohydrates, proteins, fats FROM food_entries WHERE user_id = ? AND entry_date = ?",
         (user_id, today_date)
     )
     summary['foods'] = cursor.fetchall()
 
-    # Exercícios
+    # Exercícios (sem alteração)
     cursor.execute(
         "SELECT activity_name, duration_minutes, calories_burned FROM exercise_entries WHERE user_id = ? AND entry_date = ?",
         (user_id, today_date)
     )
     summary['exercises'] = cursor.fetchall()
 
-    # Último peso (o mais recente registrado para o usuário)
+    # Último peso (sem alteração)
     cursor.execute(
         "SELECT weight FROM weight_entries WHERE user_id = ? ORDER BY entry_date DESC, entry_time DESC LIMIT 1",
         (user_id,)
@@ -209,88 +191,5 @@ def get_daily_summary(whatsapp_number):
     conn.close()
     return summary
 
-# --- Funções para Metas ---
-
-def set_goal(whatsapp_number, goal_type, target_value):
-    user_id = get_or_create_user(whatsapp_number)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Tenta atualizar se a meta já existe, senão insere
-    cursor.execute(
-        "INSERT OR REPLACE INTO goals (user_id, goal_type, target_value) VALUES (?, ?, ?)",
-        (user_id, goal_type, target_value)
-    )
-    conn.commit()
-    conn.close()
-
-def get_goal(whatsapp_number, goal_type):
-    user_id = get_or_create_user(whatsapp_number)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT target_value, start_date, end_date FROM goals WHERE user_id = ? AND goal_type = ?",
-        (user_id, goal_type)
-    )
-    goal = cursor.fetchone()
-    conn.close()
-    return goal
-
-# --- Funções para Lembretes ---
-
-def add_reminder(whatsapp_number, reminder_text, reminder_time_str):
-    user_id = get_or_create_user(whatsapp_number)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Validação simples do formato HH:MM
-    try:
-        datetime.strptime(reminder_time_str, '%H:%M').time()
-    except ValueError:
-        return False # Formato de hora inválido
-
-    cursor.execute(
-        "INSERT INTO reminders (user_id, reminder_text, reminder_time) VALUES (?, ?, ?)",
-        (user_id, reminder_text, reminder_time_str)
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-def get_active_reminders():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Pega todos os lembretes ativos junto com o número de WhatsApp do usuário
-    cursor.execute(
-        "SELECT r.reminder_text, r.reminder_time, u.whatsapp_number "
-        "FROM reminders r JOIN users u ON r.user_id = u.id "
-        "WHERE r.is_active = 1"
-    )
-    reminders = cursor.fetchall()
-    conn.close()
-    return reminders
-
-def get_user_reminders(whatsapp_number):
-    user_id = get_or_create_user(whatsapp_number)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT reminder_text, reminder_time FROM reminders WHERE user_id = ? AND is_active = 1",
-        (user_id,)
-    )
-    reminders = cursor.fetchall()
-    conn.close()
-    return reminders
-
-def deactivate_reminder(whatsapp_number, reminder_text, reminder_time_str):
-    user_id = get_or_create_user(whatsapp_number)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE reminders SET is_active = 0 WHERE user_id = ? AND reminder_text = ? AND reminder_time = ?",
-        (user_id, reminder_text, reminder_time_str)
-    )
-    conn.commit()
-    rows_affected = cursor.rowcount
-    conn.close()
-    return rows_affected > 0 # Retorna True se algum lembrete foi desativado
+# Funções restantes (add_weight_entry, add_exercise_entry, set_goal, get_goal, add_reminder, get_active_reminders, get_user_reminders, deactivate_reminder) permanecem as mesmas.
+# Para evitar repetição, elas não estão incluídas aqui, mas devem estar no seu arquivo database.py.

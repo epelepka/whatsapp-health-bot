@@ -25,17 +25,32 @@ def get_nutrition_info(query):
         data = response.json()
 
         total_calories = 0
+        total_carbohydrates = 0 # NOVO
+        total_proteins = 0      # NOVO
+        total_fats = 0          # NOVO
         foods_listed = []
 
         if 'foods' in data:
             for food in data['foods']:
                 food_name = food.get('food_name', 'Desconhecido')
                 nf_calories = food.get('nf_calories', 0)
+                nf_carbohydrates = food.get('nf_total_carbohydrate', 0) # NOVO
+                nf_proteins = food.get('nf_protein', 0)               # NOVO
+                nf_fats = food.get('nf_total_fat', 0)                 # NOVO
+                
                 total_calories += nf_calories
+                total_carbohydrates += nf_carbohydrates # NOVO
+                total_proteins += nf_proteins           # NOVO
+                total_fats += nf_fats                   # NOVO
+
+                # Para mostrar detalhadamente, pode adicionar macros aqui ou apenas o nome
                 foods_listed.append(f"{food_name} ({nf_calories:.0f} kcal)")
 
             return {
                 'calories': total_calories,
+                'carbohydrates': total_carbohydrates, # NOVO
+                'proteins': total_proteins,           # NOVO
+                'fats': total_fats,                   # NOVO
                 'foods_listed': ", ".join(foods_listed)
             }
         else:
@@ -51,20 +66,9 @@ def get_nutrition_info(query):
 # Teste (opcional)
 if __name__ == '__main__':
     # Certifique-se que NUTRITIONIX_APP_ID e NUTRITIONIX_APP_KEY estão no seu .env
-    # Estes valores precisam ser reais para o teste funcionar.
-    # Exemplo (NÃO USE ESTES, use os seus do .env):
-    # os.environ['NUTRITIONIX_APP_ID'] = 'SEU_APP_ID_AQUI'
-    # os.environ['NUTRITIONIX_APP_KEY'] = 'SUA_CHAVE_AQUI'
-
-    print("--- Testando Nutritionix API ---")
+    print("--- Testando Nutritionix API com Macronutrientes ---")
     info = get_nutrition_info("1 maça, 200g arroz cozido, 100g peito de frango")
     if info:
-        print(f"Calorias: {info['calories']:.2f}, Alimentos: {info['foods_listed']}")
+        print(f"Calorias: {info['calories']:.2f}, Carb: {info['carbohydrates']:.2f}, Prot: {info['proteins']:.2f}, Gord: {info['fats']:.2f}, Alimentos: {info['foods_listed']}")
     else:
-        print("Não foi possível obter informações nutricionais para '1 maça, 200g arroz cozido, 100g peito de frango'.")
-
-    info = get_nutrition_info("pizza")
-    if info:
-        print(f"Calorias: {info['calories']:.2f}, Alimentos: {info['foods_listed']}")
-    else:
-        print("Não foi possível obter informações nutricionais para 'pizza'.")
+        print("Não foi possível obter informações nutricionais.")
