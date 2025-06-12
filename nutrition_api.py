@@ -72,3 +72,27 @@ if __name__ == '__main__':
         print(f"Calorias: {info['calories']:.2f}, Carb: {info['carbohydrates']:.2f}, Prot: {info['proteins']:.2f}, Gord: {info['fats']:.2f}, Alimentos: {info['foods_listed']}")
     else:
         print("Não foi possível obter informações nutricionais.")
+
+        # nutrition_api.py (no final do arquivo)
+# ... (restante do código das funções) ...
+
+# Teste temporário para depuração
+if __name__ == '__main__':
+    # Certifique-se que NUTRITIONIX_APP_ID e NUTRITIONIX_APP_KEY estão no seu .env LOCAL
+    # E QUE SÃO OS MESMOS QUE VOCÊ COLOCOU NO RAILWAY
+    print("--- Testando Nutritionix API Localmente ---")
+
+    # Use o mesmo formato de consulta que o seu app enviaria
+    info = get_nutrition_info("100g de batata") # ou "100g batata" se preferir testar
+    if info:
+        print(f"Sucesso! Dados para '100g de batata':")
+        print(f"Calorias: {info['calories']:.2f}, Carb: {info['carbohydrates']:.2f}, Prot: {info['proteins']:.2f}, Gord: {info['fats']:.2f}")
+        print(f"Alimentos listados: {info['foods_listed']}")
+    else:
+        print("Falha! Não encontrou dados nutricionais para '100g de batata'. Verifique a API e as credenciais.")
+
+    info_frango_arroz = get_nutrition_info("100g de contrafile e 100g de arroz")
+    if info_frango_arroz:
+        print(f"\nSucesso! Dados para '100g de contrafile e 100g de arroz':")
+        print(f"Calorias: {info_frango_arroz['calories']:.2f}, Carb: {info_frango_arroz['carbohydrates']:.2f}, Prot: {info_frango_arroz['proteins']:.2f}, Gord: {info_frango_arroz['fats']:.2f}")
+        print(f"Alimentos listados: {info_frango_arroz['foods_listed']}")
