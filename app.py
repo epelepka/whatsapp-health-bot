@@ -162,60 +162,75 @@ def whatsapp_webhook():
         else:
             msg.body("Não consegui encontrar o valor do peso. Por favor, diga seu peso (ex: 'Meu peso é 75.5').")
 
-    elif intent == 'registrar_refeicao':
-        # food_item será uma lista de nomes de alimentos (ex: ['batata', 'frango'])
-        food_items_list = entities.get('food_item', []) 
-        # quantity será uma lista de dicionários de quantidades (ex: [{'value': 100, 'unit': 'gram', 'product': 'batata'}])
-        quantities_list = entities.get('quantity', []) 
+   # app.py (somente o bloco da intenção 'registrar_refeicao' será alterado)
 
-        if food_items_list or quantities_list: # Continua se pelo menos algo foi detectado
+    elif intent == 'registrar_refeicao':
+        food_items_list = entities.get('food_item', [])
+        quantities_list = entities.get('quantity', [])
+
+        if food_items_list or quantities_list:
             total_meal_calories = 0
             total_meal_carbs = 0
             total_meal_proteins = 0
             total_meal_fats = 0
-            foods_for_db = [] 
+            foods_for_db = []
             
-            response_lines = ["Refeição registrada:"] # Para a resposta detalhada ao usuário
+            response_lines = ["Refeição registrada:"]
             
-            # Construir uma lista de itens para consultar a Nutritionix
-            # Prioriza a informação de 'product' da entidade quantity, se houver
-            # senão usa o food_item
             queries_for_nutritionix = []
             
-            # Mapeia food_items para quantities para facilitar a combinação
-            food_to_quantity_map = {}
-            for q_item in quantities_list:
-                product_name = q_item.get('product')
-                # Adiciona a query formatada (ex: "100g de batata") se houver
-                if q_item.get('raw'):
-                    queries_for_nutritionix.append(q_item['raw'])
-                if product_name:
-                    food_to_quantity_map[product_name.lower()] = q_item
+            # --- NOVO AJUSTE AQUI: Priorizar consultas mais simples para a Nutritionix ---
             
-            # Adiciona food_items puros que não foram pegos por quantity.product
-            # Isso garante que itens sem quantidade específica (ex: "salada") sejam consultados
+            # Primeiro, tente o formato "VALOR UNIDADE PRODUTO" ou "VALOR UNIDADE de PRODUTO"
+            # Ex: "100g batata", "200 gramas frango"
+            for q_item in quantities_list:
+                value = q_item.get('value')
+                unit = q_item.get('unit')
+                product = q_item.get('product')
+
+                if value and unit and product:
+                    # Tenta "100g batata" ou "100 gramas batata"
+                    queries_for_nutritionix.append(f"{value}{unit} {product}")
+                    queries_for_nutritionix.append(f"{value} {unit} de {product}") # Com "de"
+                elif product: # Se tem produto, mas não quantidade, só o produto
+                    queries_for_nutritionix.append(product)
+                elif q_item.get('raw'): # Como último recurso para quantidade, a string bruta
+                    queries_for_nutritionix.append(q_item['raw'])
+
+
+            # Em seguida, adicione apenas os food_items puros (ex: "salada", "arroz", "contrafile")
+            # Isso é crucial para itens que podem não ter vindo com quantidade ou que a Nutritionix prefere assim
             for food_name in food_items_list:
-                if food_name.lower() not in food_to_quantity_map:
+                # Adiciona o nome do alimento como consulta. 
+                # Evita duplicar se já adicionado por uma quantity que tinha o 'product'
+                # ou se já é uma consulta tipo "100g de X"
+                found_in_quantities = False
+                for q_item in quantities_list:
+                    if q_item.get('product') and q_item.get('product').lower() == food_name.lower():
+                        found_in_quantities = True
+                        break
+                if not found_in_quantities:
                     queries_for_nutritionix.append(food_name)
             
-            # Remove duplicatas e mantém ordem (importante para evitar consultas repetidas)
+            # Final, remove duplicatas e mantém ordem (importante para evitar consultas repetidas)
             final_queries = []
             seen_queries = set()
             for q in queries_for_nutritionix:
-                # Use a string como chave para o set, mas normalize (lower) para comparação
                 normalized_q = q.lower()
                 if normalized_q not in seen_queries:
                     final_queries.append(q)
                     seen_queries.add(normalized_q)
 
-            if not final_queries: # Se após toda a lógica, não há itens para consultar
-                msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e frango').")
+            print(f"Consultando Nutritionix com: {final_queries}") # NOVO: log para ver as consultas
+
+            if not final_queries:
+                msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
                 return str(resp)
 
 
             for item_query in final_queries:
                 nutrition_data = get_nutrition_info(item_query)
-                if nutrition_data:
+                if nutrition_data and nutrition_data['calories'] > 0: # Adicionado 'calories > 0' para filtrar resultados vazios
                     total_meal_calories += nutrition_data['calories']
                     total_meal_carbs += nutrition_data['carbohydrates']
                     total_meal_proteins += nutrition_data['proteins']
@@ -229,6 +244,43 @@ def whatsapp_webhook():
                     )
                 else:
                     response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}'.")
+            
+            # Garante que sempre haja algo para o DB, mesmo que nenhum item tenha dado resultado
+            db_description = ", ".join(foods_for_db) if foods_for_db else "Itens não processados"
+            
+            # Armazena a refeição completa com os totais
+            add_food_entry(
+                from_number,
+                db_description, 
+                total_meal_calories,
+                total_meal_carbs,
+                total_meal_proteins,
+                total_meal_fats
+            )
+            
+            # Calcular calorias restantes (resto do código igual)
+            calorie_goal = get_goal(from_number, 'calorie_intake')
+            summary = get_daily_summary(from_number) 
+            total_consumed_today = sum(f['calories'] for f in summary['foods']) 
+
+            final_response = "Refeição registrada:\n" + "\n".join(response_lines)
+            final_response += f"\n\nTotal da refeição: {total_meal_calories:.0f} kcal, {total_meal_carbs:.0f}g Carb, {total_meal_proteins:.0f}g Prot, {total_meal_fats:.0f}g Gord."
+
+            if calorie_goal:
+                remaining_calories = calorie_goal['target_value'] - total_consumed_today
+                if remaining_calories >= 0:
+                    final_response += f"\nVocê ainda pode consumir {remaining_calories:.0f} kcal hoje para atingir sua meta de {calorie_goal['target_value']:.0f} kcal."
+                else:
+                    final_response += f"\n🚨 Atenção: Você já excedeu sua meta diária de {calorie_goal['target_value']:.0f} kcal em {-remaining_calories:.0f} kcal."
+            else:
+                final_response += "\nDefina uma meta de calorias diárias para saber quantas calorias ainda pode consumir (ex: 'Definir meta calorias 2000')."
+            
+            msg.body(final_response)
+
+        else: 
+            msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
+
+# ... (resto do app.py) ...
 
             # Armazena a refeição completa com os totais
             add_food_entry(
