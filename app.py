@@ -1,3 +1,12 @@
+Entendido! Um "crash no deploy" é um erro que impede o aplicativo de sequer iniciar. Isso quase sempre é um erro de sintaxe ou um erro lógico que ocorre muito cedo no processo de inicialização do aplicativo.
+
+É provável que a última alteração no bloco registrar_refeicao tenha introduzido um erro de digitação ou uma lógica que travou o app.
+
+Para resolver isso, aqui está o seu arquivo app.py completo e atualizado com todas as funcionalidades que implementamos até agora, incluindo as mais recentes modificações na lógica de registrar_refeicao, e com algumas pequenas melhorias de robustez para evitar crashes.
+
+app.py Completo e Atualizado (com todas as últimas modificações)
+Python
+
 # app.py
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
@@ -161,60 +170,57 @@ def whatsapp_webhook():
         else:
             msg.body("Não consegui encontrar o valor do peso. Por favor, diga seu peso (ex: 'Meu peso é 75.5').")
 
-     elif intent == 'registrar_refeicao':
-        food_items_list = entities.get('food_item', []) # Lista de nomes de alimentos (ex: ['batata', 'frango'])
-        quantities_list = entities.get('quantity', []) # Lista de dicionários de quantidades
+    elif intent == 'registrar_refeicao':
+        # food_item será uma lista de nomes de alimentos (ex: ['batata', 'frango'])
+        food_items_list = entities.get('food_item', []) 
+        # quantity será uma lista de dicionários de quantidades (ex: [{'value': 100, 'unit': 'gram', 'product': 'batata'}])
+        quantities_list = entities.get('quantity', []) 
 
-        if food_items_list or quantities_list:
+        if food_items_list or quantities_list: # Continua se pelo menos algo foi detectado
             total_meal_calories = 0
             total_meal_carbs = 0
             total_meal_proteins = 0
             total_meal_fats = 0
-            foods_for_db = [] # Para armazenar as descrições que irão para o DB
+            foods_for_db = [] 
             
             response_lines = ["Refeição registrada:"] # Para a resposta detalhada ao usuário
             
-            # NOVO CÓDIGO AQUI: Construir consultas individuais para a Nutritionix
+            # Construir uma lista de itens para consultar a Nutritionix
+            # Prioriza a informação de 'product' da entidade quantity, se houver
+            # senão usa o food_item
             queries_for_nutritionix = []
             
-            # Primeiro, tente associar quantidades a produtos
+            # Mapeia food_items para quantities para facilitar a combinação
+            food_to_quantity_map = {}
             for q_item in quantities_list:
-                # Se wit/quantity já deu um 'product' (ex: "iogurte" para "700g de iogurte")
-                if q_item.get('product'):
-                    # Formata a string de consulta como "VALORUNIDADE de PRODUTO" ou "VALORUNIDADE PRODUTO"
-                    query_string = f"{q_item['value']}{q_item['unit']} de {q_item['product']}"
-                    queries_for_nutritionix.append(query_string)
-                elif q_item.get('raw'): # Se não tem produto, mas tem o texto bruto da entidade
+                product_name = q_item.get('product')
+                # Adiciona a query formatada (ex: "100g de batata") se houver
+                if q_item.get('raw'):
                     queries_for_nutritionix.append(q_item['raw'])
-
-            # Em seguida, adicione food_items que não foram cobertos pelas quantities (ex: "salada", "ovo")
-            # e também adicione os food_items associados aos products das quantities para garantir
-            # (pois a Nutritionix pode preferir "batata" a "100g de batata" em alguns casos)
-            all_food_names_from_entities = set(food_items_list) # Usar set para remover duplicatas
-            for q_item in quantities_list:
-                if q_item.get('product'):
-                    all_food_names_from_entities.add(q_item['product'])
-
-            for food_name in all_food_names_from_entities:
-                # Adiciona o nome do alimento como consulta se ainda não foi incluído como parte de uma quantity
-                # Ou se a query_string anterior não funcionou, essa é uma alternativa
-                if f"{food_name}" not in queries_for_nutritionix and \
-                   f"de {food_name}" not in queries_for_nutritionix: # Evitar duplicatas óbvias
+                if product_name:
+                    food_to_quantity_map[product_name.lower()] = q_item
+            
+            # Adiciona food_items puros que não foram pegos por quantity.product
+            # Isso garante que itens sem quantidade específica (ex: "salada") sejam consultados
+            for food_name in food_items_list:
+                if food_name.lower() not in food_to_quantity_map:
                     queries_for_nutritionix.append(food_name)
             
-            # Final, remove duplicatas e mantém ordem (opcional, mas boa prática)
+            # Remove duplicatas e mantém ordem (importante para evitar consultas repetidas)
             final_queries = []
             seen_queries = set()
             for q in queries_for_nutritionix:
-                if q.lower() not in seen_queries: # Case insensitive check
+                # Use a string como chave para o set, mas normalize (lower) para comparação
+                normalized_q = q.lower()
+                if normalized_q not in seen_queries:
                     final_queries.append(q)
-                    seen_queries.add(q.lower())
+                    seen_queries.add(normalized_q)
 
             if not final_queries: # Se após toda a lógica, não há itens para consultar
-                msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
+                msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e frango').")
                 return str(resp)
 
-            # AGORA, Itere sobre as consultas INDIVIDUAIS
+
             for item_query in final_queries:
                 nutrition_data = get_nutrition_info(item_query)
                 if nutrition_data:
@@ -233,42 +239,9 @@ def whatsapp_webhook():
                     response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}'.")
 
             # Armazena a refeição completa com os totais
-            # Use o item_query se foods_for_db estiver vazio
             add_food_entry(
                 from_number,
                 ", ".join(foods_for_db) if foods_for_db else "Itens não encontrados", 
-                total_meal_calories,
-                total_meal_carbs,
-                total_meal_proteins,
-                total_meal_fats
-            )
-            
-            # Calcular calorias restantes (resto do código igual)
-            calorie_goal = get_goal(from_number, 'calorie_intake')
-            summary = get_daily_summary(from_number) 
-            total_consumed_today = sum(f['calories'] for f in summary['foods']) 
-
-            final_response = "Refeição registrada:\n" + "\n".join(response_lines)
-            final_response += f"\n\nTotal da refeição: {total_meal_calories:.0f} kcal, {total_meal_carbs:.0f}g Carb, {total_meal_proteins:.0f}g Prot, {total_meal_fats:.0f}g Gord."
-
-            if calorie_goal:
-                remaining_calories = calorie_goal['target_value'] - total_consumed_today
-                if remaining_calories >= 0:
-                    final_response += f"\nVocê ainda pode consumir {remaining_calories:.0f} kcal hoje para atingir sua meta de {calorie_goal['target_value']:.0f} kcal."
-                else:
-                    final_response += f"\n🚨 Atenção: Você já excedeu sua meta diária de {calorie_goal['target_value']:.0f} kcal em {-remaining_calories:.0f} kcal."
-            else:
-                final_response += "\nDefina uma meta de calorias diárias para saber quantas calorias ainda pode consumir (ex: 'Definir meta calorias 2000')."
-            
-            msg.body(final_response)
-
-        else: 
-            msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e frango').")
-
-            # Armazena a refeição completa com os totais
-            add_food_entry(
-                from_number,
-                ", ".join(foods_for_db) if foods_for_db else item_query, # Descrição para o DB
                 total_meal_calories,
                 total_meal_carbs,
                 total_meal_proteins,
@@ -391,11 +364,11 @@ def whatsapp_webhook():
         goal_type_list = entities.get('goal_type', [])
         target_value = entities.get('target_value')
         
-        goal_type = goal_type_list[0] if goal_type_list else None # Pega o primeiro da lista
+        goal_type = goal_type_list[0] if goal_type_list else None 
         
         if goal_type and target_value:
             try:
-                target_value = float(target_value) # Sempre float para valores de meta
+                target_value = float(target_value) 
                 set_goal(from_number, goal_type, target_value)
                 msg.body(f"Meta de {goal_type} definida para {target_value} com sucesso!")
             except ValueError:
@@ -440,19 +413,17 @@ def whatsapp_webhook():
         reminder_time_str = None
         if wit_time_obj:
             try:
-                if 'T' in wit_time_obj and ':' in wit_time_obj: # Parece um formato ISO
-                    time_part = wit_time_obj.split('T')[1].split(':')[0:2] # Pega HH:MM
+                if 'T' in wit_time_obj and ':' in wit_time_obj: 
+                    time_part = wit_time_obj.split('T')[1].split(':')[0:2] 
                     reminder_time_str = ":".join(time_part)
-                elif re.match(r'^\d{2}:\d{2}$', wit_time_obj): # Se já for HH:MM
+                elif re.match(r'^\d{2}:\d{2}$', wit_time_obj): 
                      reminder_time_str = wit_time_obj
-                else: # Último recurso, tenta parsear como datetime e formatar
-                    # Lida com o 'Z' para UTC
+                else: 
                     dt_object = datetime.fromisoformat(wit_time_obj.replace('Z', '+00:00')) 
                     reminder_time_str = dt_object.strftime('%H:%M')
 
             except Exception as e: 
                 print(f"Erro ao parsear wit_time_obj '{wit_time_obj}': {e}")
-                # Fallback: Se não conseguir parsear, usa o valor bruto se for HH:MM válido
                 if re.match(r'^\d{2}:\d{2}$', wit_time_obj):
                     reminder_time_str = wit_time_obj
 
@@ -483,7 +454,7 @@ def whatsapp_webhook():
             response_lines.append("\nPara desativar um, diga 'Desativar lembrete [texto] [HH:MM]'.")
             msg.body("\n".join(response_lines))
         else:
-            msg.body("Você não tem lembretes ativos. Use 'Definir lembrete' para criar um.")
+            msg.body("Você não tem lembretes ativos. Use 'definir lembrete' para criar um.")
 
     elif intent == 'desativar_lembrete': 
         reminder_text_list = entities.get('reminder_text', [])
@@ -535,4 +506,4 @@ def whatsapp_webhook():
 if __name__ == "__main__":
     print("6. Tentando rodar o aplicativo Flask.") 
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
+    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).") 
