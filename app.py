@@ -1,10 +1,3 @@
-Com certeza! Entendo que, após todas as mudanças, ter o arquivo app.py completo e atualizado é essencial para garantir que tudo esteja no lugar certo.
-
-Este código inclui todas as funcionalidades que implementamos, desde o registro básico até a integração com o Wit.ai para NLP, o cálculo de macronutrientes e calorias restantes, e as otimizações na forma como a API da Nutritionix é consultada. Ele também tem as melhorias de robustez e os prints para ajudar na depuração.
-
-app.py Completo e Atualizado (para otimizar consultas Nutritionix)
-Python
-
 # app.py
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
