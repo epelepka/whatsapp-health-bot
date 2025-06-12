@@ -1,11 +1,3 @@
-Entendido! Um "crash no deploy" é um erro que impede o aplicativo de sequer iniciar. Isso quase sempre é um erro de sintaxe ou um erro lógico que ocorre muito cedo no processo de inicialização do aplicativo.
-
-É provável que a última alteração no bloco registrar_refeicao tenha introduzido um erro de digitação ou uma lógica que travou o app.
-
-Para resolver isso, aqui está o seu arquivo app.py completo e atualizado com todas as funcionalidades que implementamos até agora, incluindo as mais recentes modificações na lógica de registrar_refeicao, e com algumas pequenas melhorias de robustez para evitar crashes.
-
-app.py Completo e Atualizado (com todas as últimas modificações)
-Python
 
 # app.py
 from flask import Flask, request
