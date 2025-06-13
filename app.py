@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import re
 from datetime import datetime, date, time
-import json 
+import json # Para serializar/desserializar o contexto do estado
 
 print("1. Imports carregados.") 
 
@@ -25,7 +25,7 @@ print("2. Funções do banco de dados e APIs importadas.")
 # Para agendamento de tarefas
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import atexit 
+import atexit # Para garantir que o agendador seja desligado corretamente
 
 load_dotenv() 
 
@@ -126,6 +126,16 @@ atexit.register(lambda: scheduler.shutdown())
 # Agenda os lembretes existentes ao iniciar o app
 with app.app_context():
     schedule_all_reminders()
+
+# --- FUNÇÃO AUXILIAR PARA EXTRAIR NOME BASE DE UMA QUERY (Adicionada AQUI) ---
+def _get_base_food_name_from_query_string(query_str):
+    # Tenta pegar a parte do alimento de uma string de query como "100g de arroz"
+    # ou "arroz, integral, cozido" -> "arroz"
+    match = re.search(r'(?:^|\d+\s*(?:g|gramas|ml|litro|xicara|copo)?\s*(?:de|do|da|dos|das)?\s*)([\w\s,]+)$', query_str, re.IGNORECASE)
+    if match:
+        # Pega o último grupo capturado (o nome do alimento), remove vírgulas, tira espaços e pega a primeira parte se for composto
+        return match.group(1).strip().split(',')[0].strip().lower()
+    return query_str.strip().lower() # Retorna a query original em minúsculas como fallback
 
 @app.route("/webhook", methods=['POST'])
 def whatsapp_webhook():
