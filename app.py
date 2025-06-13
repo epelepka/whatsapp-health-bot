@@ -1,25 +1,43 @@
-# app.py (somente as primeiras linhas, focando nas importações)
+Entendido! Você me enviou o log de erro do Railway, e ele é muito claro:
 
-# ... (imports existentes) ...
+NameError: name 'load_dotenv' is not defined
+E a linha onde o erro ocorre é:
+
+Python
+
+File "/app/app.py", line 34, in <module>
+    load_dotenv() # Carrega as variáveis de ambiente do arquivo .env
+O Problema: load_dotenv Não Foi Importado no app.py
+Este NameError significa que a função load_dotenv() está sendo chamada no seu app.py, mas ela não foi importada de sua biblioteca (python-dotenv). O Python não sabe o que load_dotenv significa.
+
+Isso é uma falha de importação que deve ter acontecido durante alguma das atualizações do app.py, onde a linha de importação pode ter sido removida ou não incluída.
+
+A Solução: Adicionar a Importação de load_dotenv no app.py
+Precisamos adicionar from dotenv import load_dotenv no início do seu app.py.
+
+Correção no app.py (Importação load_dotenv)
+Vou te dar o app.py completo com esta correção e todas as últimas atualizações.
+
+Python
+
+# app.py
+from flask import Flask, request
+from twilio.twiml.messaging_response import MessagingResponse
+from twilio.rest import Client
+import os
+from dotenv import load_dotenv # CORREÇÃO AQUI: Importa load_dotenv
+import re
+from datetime import datetime, date, time
+
+print("1. Imports carregados.") 
 
 # Importa as funções que criaremos
 from database import init_db, get_or_create_user, add_food_entry, add_weight_entry, add_exercise_entry, get_daily_summary, \
                      set_goal, get_goal, add_reminder, get_active_reminders, get_user_reminders, deactivate_reminder, \
                      update_last_interaction_date, get_last_interaction_date, get_all_users, \
                      delete_all_food_entries_for_day, get_food_entries_for_day_indexed, delete_food_entry_by_id, \
-                     set_user_state, get_user_state # NOVAS FUNÇÕES DE DB E ESTADO
+                     set_user_state, get_user_state 
 # REMOVIDO: from nutrition_api import get_nutrition_info 
-from activity_api import calculate_calories_burned
-from wit_nlp import get_wit_ai_response, parse_wit_ai_response 
-from taco_api import get_taco_nutrition 
-
-
-# Importa as funções que criaremos
-from database import init_db, add_food_entry, add_weight_entry, add_exercise_entry, get_daily_summary, \
-                     set_goal, get_goal, add_reminder, get_active_reminders, get_user_reminders, deactivate_reminder, \
-                     update_last_interaction_date, get_last_interaction_date, get_all_users, \
-                     delete_all_food_entries_for_day, get_food_entries_for_day_indexed, delete_food_entry_by_id, \
-                     set_user_state, get_user_state
 from activity_api import calculate_calories_burned
 from wit_nlp import get_wit_ai_response, parse_wit_ai_response 
 from taco_api import get_taco_nutrition 
@@ -283,10 +301,10 @@ def whatsapp_webhook():
                         f"Carb: {taco_data['carbohydrates']:.0f} | Prot: {taco_data['proteins']:.0f} | "
                         f"Gord: {taco_data['fats']:.0f})"
                     )
-                    processed_alimentos_taco_db.add(taco_data['original_alimento'].lower()) 
+                    items_found_and_processed.append(taco_data['original_alimento']) 
                 else:
                     is_redundant_query = False
-                    for existing_item in processed_alimentos_taco_db:
+                    for existing_item in items_found_and_processed:
                         if existing_item.lower() in item_query.lower() or item_query.lower() in existing_item.lower():
                             is_redundant_query = True
                             break
@@ -415,7 +433,7 @@ def whatsapp_webhook():
         else:
             msg.body("Você ainda não registrou nenhuma refeição hoje. Use 'comi [alimento]' para registrar.")
 
-    # --- NOVO: Lógica para Limpar todas as refeições do dia ---
+    # --- Lógica para Limpar todas as refeições do dia ---
     elif intent == 'limpar_refeicoes_dia':
         deleted_count = delete_all_food_entries_for_day(from_number)
         if deleted_count > 0:
@@ -423,7 +441,7 @@ def whatsapp_webhook():
         else:
             msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
     
-    # --- NOVO: Lógica para Excluir refeição específica ---
+    # --- Lógica para Excluir refeição específica ---
     elif intent == 'excluir_refeicao_especifica':
         entry_number_list = entities.get('entry_number', [])
         
@@ -571,4 +589,4 @@ def whatsapp_webhook():
 if __name__ == "__main__":
     print("6. Tentando rodar o aplicativo Flask.") 
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).") 
+    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
