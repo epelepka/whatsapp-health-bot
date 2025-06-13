@@ -131,7 +131,7 @@ with app.app_context():
 def whatsapp_webhook():
     incoming_msg = request.values.get('Body', '') 
     from_number = request.values.get('From', '') 
-    user_id = get_or_create_user(from_number) 
+    user_id = get_or_create_user(from_number) # Obtém o ID do usuário para o estado
 
     resp = MessagingResponse()
     msg = resp.message()
@@ -249,13 +249,13 @@ def whatsapp_webhook():
                 msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
                 return str(resp)
 
-            items_found_and_processed = set() 
+            items_found_original_names = set() 
+            response_lines_for_display = [] 
             
             for item_query in final_queries:
                 taco_data = get_taco_nutrition(item_query) 
                 
-                # Se encontrou dados e o alimento não foi processado ainda
-                if taco_data and taco_data['calories'] > 0 and taco_data['original_alimento'].lower() not in items_found_and_processed:
+                if taco_data and taco_data['calories'] > 0 and taco_data['original_alimento'].lower() not in items_found_original_names:
                     total_meal_calories += taco_data['calories']
                     total_meal_carbs += taco_data['carbohydrates']
                     total_meal_proteins += taco_data['proteins']
@@ -263,24 +263,23 @@ def whatsapp_webhook():
                     
                     foods_for_db.append(taco_data['foods_listed']) 
                     
-                    response_lines.append(
+                    response_lines_for_display.append(
                         f"- {taco_data['foods_listed']} (Cal: {taco_data['calories']:.0f} | "
                         f"Carb: {taco_data['carbohydrates']:.0f} | Prot: {taco_data['proteins']:.0f} | "
                         f"Gord: {taco_data['fats']:.0f})"
                     )
-                    items_found_and_processed.add(taco_data['original_alimento'].lower()) 
+                    items_found_original_names.add(taco_data['original_alimento'].lower()) 
                 else:
-                    # Ajuste para evitar mensagens redundantes de "Não encontrei" para alimentos que já foram encontrados
                     is_redundant_message = False
-                    for existing_item_original_name in items_found_and_processed:
-                        # Se a query atual contém o nome de um item já encontrado (ex: "100g de arroz" se "arroz" já foi achado)
-                        # ou se o item_query é o mesmo que o original encontrado (ex: "arroz")
-                        if existing_item_original_name.lower() in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
+                    base_name_from_query = _get_base_food_name_from_query_string(item_query)
+                    
+                    for found_original_name in items_found_original_names:
+                        if base_name_from_query and (base_name_from_query in found_original_name or found_original_name in base_name_from_query):
                             is_redundant_message = True
                             break
                     
                     if not is_redundant_message:
-                        response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}' na TACO.")
+                        response_lines_for_display.append(f"- Não encontrei dados nutricionais para '{item_query}' na TACO.")
             
             db_description = ", ".join(foods_for_db) if foods_for_db else "Itens não processados"
             
@@ -297,7 +296,7 @@ def whatsapp_webhook():
             summary = get_daily_summary(from_number) 
             total_consumed_today = sum(f['calories'] for f in summary['foods']) 
 
-            final_response = "Refeição registrada:\n" + "\n".join(response_lines)
+            final_response = "\n".join(response_lines_for_display)
             final_response += f"\n\nTotal da refeição: {total_meal_calories:.0f} kcal, {total_meal_carbs:.0f}g Carb, {total_meal_proteins:.0f}g Prot, {total_meal_fats:.0f}g Gord."
 
             if calorie_goal:
@@ -314,7 +313,95 @@ def whatsapp_webhook():
         else: 
             msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
 
-    # --- Lógica para Limpar todas as refeições do dia ---
+    elif intent == 'registrar_exercicio':
+        activity_name_list = entities.get('activity_name', []) 
+        duration_value = entities.get('duration_value')
+        duration_unit_list = entities.get('duration_unit', []) 
+
+        activity_name = activity_name_list[0] if activity_name_list else None
+        duration_unit = duration_unit_list[0] if duration_unit_list else None
+
+
+        if activity_name and duration_value and duration_unit:
+            try:
+                duration_minutes = int(duration_value)
+                if duration_unit.lower() in ['horas', 'hr', 'hora']: 
+                    duration_minutes *= 60
+
+                summary_for_weight = get_daily_summary(from_number)
+                user_weight_kg = summary_for_weight['last_weight'] if summary_for_weight['last_weight'] else 70
+
+                calories_burned = calculate_calories_burned(activity_name, duration_minutes, user_weight_kg)
+
+                if calories_burned > 0:
+                    add_exercise_entry(from_number, activity_name, duration_minutes, calories_burned)
+                    msg.body(f"Registrado: {activity_name} por {duration_value} {duration_unit}. Calorias queimadas estimadas: {calories_burned:.2f}.")
+                else:
+                    msg.body(f"Não consegui estimar as calorias para '{activity_name}'. Tente um exercício mais comum.")
+            except ValueError:
+                msg.body("Formato de duração inválido. Use números (ex: '30 minutos').")
+        else:
+            msg.body("Não consegui identificar o exercício ou a duração. Use 'Fiz [exercício] por [tempo]' (ex: 'Fiz corrida por 30 minutos').")
+
+    elif intent == 'obter_resumo_diario':
+        summary = get_daily_summary(from_number)
+        if summary:
+            food_summary = []
+            total_food_calories = 0
+            total_food_carbs = 0
+            total_food_proteins = 0
+            total_food_fats = 0
+
+            for f in summary['foods']:
+                food_summary.append(f"- {f['foods_description']} (Cal: {f['calories']:.0f} | Carb: {f['carbohydrates']:.0f} | Prot: {f['proteins']:.0f} | Gord: {f['fats']:.0f})")
+                total_food_calories += f['calories']
+                total_food_carbs += f['carbohydrates']
+                total_food_proteins += f['proteins']
+                total_food_fats += f['fats']
+            
+            food_summary_text = "\n".join(food_summary) if food_summary else 'Nenhum alimento registrado.'
+
+            exercise_summary = "\n".join([f"- {e['activity_name']} por {e['duration_minutes']} min ({e['calories_burned']:.2f} kcal) queimadas" for e in summary['exercises']])
+            weight_info = f"Seu último peso registrado: {summary['last_weight']:.1f} kg" if summary['last_weight'] else "Nenhum peso registrado."
+            total_calories_burned = sum(e['calories_burned'] for e in summary['exercises'])
+
+            response_text = (
+                f"Resumo do dia para {from_number}:\n\n"
+                f"--- Alimentação ({total_food_calories:.2f} kcal) ---\n"
+                f"{food_summary_text}\n"
+                f"(Total Carb: {total_food_carbs:.0f}g | Prot: {total_food_proteins:.0f}g | Gord: {total_food_fats:.0f}g)\n\n"
+                f"--- Exercícios ({total_calories_burned:.2f} kcal queimadas) ---\n"
+                f"{exercise_summary if exercise_summary else 'Nenhum exercício registrado.'}\n\n"
+                f"{weight_info}\n\n"
+                f"Balanço calórico estimado: {total_food_calories - total_calories_burned:.2f} kcal (Calorias Consumidas - Calorias Queimadas)"
+            )
+            msg.body(response_text)
+        else:
+            msg.body("Nenhum registro encontrado para hoje.")
+
+    elif intent == 'listar_refeicoes': 
+        summary = get_daily_summary(from_number)
+        food_summary_list = summary['foods']
+        
+        if food_summary_list:
+            response_lines = ["Suas refeições de hoje:"]
+            total_calories_consumed = 0
+            for food_entry in food_summary_list:
+                food_description = food_entry['foods_description']
+                calories = food_entry['calories']
+                carbs = food_entry['carbohydrates']
+                proteins = food_entry['proteins']
+                fats = food_entry['fats']
+
+                response_lines.append(
+                    f"- {food_description} (Cal: {calories:.0f} | Carb: {carbs:.0f} | Prot: {proteins:.0f} | Gord: {fats:.0f})"
+                )
+                total_calories_consumed += calories
+            response_lines.append(f"\nTotal de calorias consumidas hoje: {total_calories_consumed:.2f} kcal.")
+            msg.body("\n".join(response_lines))
+        else:
+            msg.body("Você ainda não registrou nenhuma refeição hoje. Use 'comi [alimento]' para registrar.")
+
     elif intent == 'limpar_refeicoes_dia':
         deleted_count = delete_all_food_entries_for_day(from_number)
         if deleted_count > 0:
@@ -322,14 +409,12 @@ def whatsapp_webhook():
         else:
             msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
     
-    # --- Lógica para Excluir refeição específica ---
     elif intent == 'excluir_refeicao_especifica':
         entry_number_list = entities.get('entry_number', [])
         
-        if entry_number_list: # Se o usuário já informou o número na mesma frase (ex: "excluir refeição 1")
-            chosen_index = int(entry_number_list[0])
+        if entry_number_list: 
+            chosen_index = int(entry_number_list[0]) 
             
-            # Pega as refeições para mapear o índice ao ID do DB
             current_meals = get_food_entries_for_day_indexed(from_number)
             meal_ids_map = { (i+1): meal['id'] for i, meal in enumerate(current_meals) }
             
@@ -344,26 +429,23 @@ def whatsapp_webhook():
             else:
                 msg.body("Número de refeição inválido. Por favor, digite um número que esteja na sua lista de refeições do dia.")
             
-            # Reseta o estado do usuário (se ele usou "excluir refeição X", o estado não foi setado para aguardar)
-            set_user_state(from_number, 'none') # Garante que o estado seja limpo após a ação
-            
-        else: # Se o usuário disse apenas "excluir refeição", sem número. INICIA O PROCESSO MULTI-TURN
+            set_user_state(from_number, 'none')
+            return str(resp) 
+        else:
             meals_today = get_food_entries_for_day_indexed(from_number)
             
             if not meals_today:
                 msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
-                # Reseta o estado
                 set_user_state(from_number, 'none')
             else:
                 response_lines = ["Suas refeições de hoje:"]
-                meal_ids_map = {} # Mapeia índice do usuário para ID do DB
+                meal_ids_map = {} 
                 for i, meal in enumerate(meals_today):
                     response_lines.append(f"{i+1}: {meal['foods_description']} ({meal['calories']:.0f} kcal)")
-                    meal_ids_map[i+1] = meal['id'] # Armazena o ID real do DB
+                    meal_ids_map[i+1] = meal['id'] 
                 
                 response_lines.append("\nQual refeição você quer excluir? Por favor, envie APENAS o número (ex: '1').")
                 
-                # Seta o estado do usuário para aguardar o número, e guarda o mapa de IDs
                 set_user_state(from_number, 'awaiting_meal_delete_number', meal_ids_map)
                 
                 msg.body("\n".join(response_lines))
@@ -403,7 +485,7 @@ def whatsapp_webhook():
                 )
                 with app.app_context():
                     schedule_all_reminders()
-                msg.body(f"Lembrete '{reminder_text}' definido para as {reminder_time_str} com sucesso!")
+                msg.body(f"Lembrete '{reminder_text}' às {reminder_time_str} desativado com sucesso.")
             else:
                 msg.body("Não consegui definir o lembrete. Verifique o formato da hora (HH:MM).")
         else:
@@ -470,4 +552,4 @@ def whatsapp_webhook():
 if __name__ == "__main__":
     print("6. Tentando rodar o aplicativo Flask.") 
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
+    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).") 
