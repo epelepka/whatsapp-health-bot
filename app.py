@@ -1,4 +1,3 @@
-
 # app.py
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
@@ -7,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import re
 from datetime import datetime, date, time
-import json # Para serializar/desserializar o contexto do estado
+import json 
 
 print("1. Imports carregados.") 
 
@@ -26,9 +25,9 @@ print("2. Funções do banco de dados e APIs importadas.")
 # Para agendamento de tarefas
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import atexit # Para garantir que o agendador seja desligado corretamente
+import atexit 
 
-load_dotenv() # Carrega as variáveis de ambiente do arquivo .env
+load_dotenv() 
 
 app = Flask(__name__)
 
@@ -37,7 +36,7 @@ print("3. Flask app criado.")
 # Configurações da Twilio (do .env)
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER') # Seu número Twilio WhatsApp habilitado
+TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER') 
 
 # Cliente Twilio para enviar mensagens proativas (para os lembretes e bom dia)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -132,23 +131,20 @@ with app.app_context():
 def whatsapp_webhook():
     incoming_msg = request.values.get('Body', '') 
     from_number = request.values.get('From', '') 
-    user_id = get_or_create_user(from_number) # Obtém o ID do usuário para o estado
+    user_id = get_or_create_user(from_number) 
 
     resp = MessagingResponse()
     msg = resp.message()
 
     print(f"Mensagem recebida de {from_number}: {incoming_msg}")
 
-    # --- ATUALIZA A DATA DA ÚLTIMA INTERAÇÃO A CADA MENSAGEM RECEBIDA ---
     with app.app_context():
         update_last_interaction_date(from_number)
 
-    # --- Gerenciamento de Estado da Conversa ---
     user_state = get_user_state(from_number)
     current_state = user_state['state']
     context_data = user_state['context_data']
 
-    # Se o usuário está esperando um número de refeição para exclusão
     if current_state == 'awaiting_meal_delete_number':
         parsed_data = parse_wit_ai_response(incoming_msg) 
         entry_number_list = parsed_data['entities'].get('entry_number', [])
@@ -156,7 +152,6 @@ def whatsapp_webhook():
         if entry_number_list:
             chosen_index = int(entry_number_list[0]) 
             
-            # Recupera a lista de IDs de refeição do contexto
             meal_ids_map = context_data.get('meal_ids_map') 
             
             if meal_ids_map and chosen_index in meal_ids_map:
@@ -170,14 +165,12 @@ def whatsapp_webhook():
             else:
                 msg.body("Número de refeição inválido. Por favor, digite um número da lista.")
             
-            # Reseta o estado do usuário após a ação
             set_user_state(from_number, 'none')
             return str(resp) 
         else:
             msg.body("Não entendi qual refeição você quer excluir. Por favor, digite apenas o número da refeição na lista (ex: '1').")
             return str(resp) 
 
-    # --- Processar a mensagem com Wit.ai para Intenções Normais ---
     wit_response = get_wit_ai_response(incoming_msg) 
     parsed_data = parse_wit_ai_response(wit_response)
     
@@ -185,8 +178,6 @@ def whatsapp_webhook():
     entities = parsed_data['entities']
 
     print(f"Intenção detectada: {intent}, Entidades: {entities}")
-
-    # --- Lógica baseada na Intenção detectada ---
 
     if intent == 'registrar_peso':
         weight = entities.get('weight_value')
@@ -261,16 +252,9 @@ def whatsapp_webhook():
             items_found_and_processed = set() 
             
             for item_query in final_queries:
-                found_in_db_already = False
-                for processed_item_original_name in items_found_and_processed:
-                    if processed_item_original_name.lower() in item_query.lower() or item_query.lower() in processed_item_original_name.lower():
-                        found_in_db_already = True
-                        break
-                if found_in_db_already:
-                    continue 
-
                 taco_data = get_taco_nutrition(item_query) 
-                if taco_data and taco_data['calories'] > 0: 
+                
+                if taco_data and taco_data['calories'] > 0 and taco_data['original_alimento'].lower() not in items_found_and_processed:
                     total_meal_calories += taco_data['calories']
                     total_meal_carbs += taco_data['carbohydrates']
                     total_meal_proteins += taco_data['proteins']
@@ -285,9 +269,11 @@ def whatsapp_webhook():
                     )
                     items_found_and_processed.add(taco_data['original_alimento'].lower()) 
                 else:
+                    # Ajuste para evitar mensagens redundantes de "Não encontrei" para alimentos que já foram encontrados
                     is_redundant_message = False
                     for existing_item_original_name in items_found_and_processed:
-                        if existing_item_original_name.lower() in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
+                        # Se a query atual contém o nome de um item já encontrado (ex: "100g de arroz" se "arroz" já foi achado)
+                        if existing_item_original_name in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
                             is_redundant_message = True
                             break
                     
@@ -571,4 +557,4 @@ def whatsapp_webhook():
 if __name__ == "__main__":
     print("6. Tentando rodar o aplicativo Flask.") 
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).") 
+    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
