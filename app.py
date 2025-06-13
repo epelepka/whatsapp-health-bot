@@ -3,9 +3,10 @@ from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 import os
-from dotenv import load_dotenv # CORREÇÃO AQUI: Importa load_dotenv
+from dotenv import load_dotenv
 import re
 from datetime import datetime, date, time
+import json # Para serializar/desserializar o contexto do estado
 
 print("1. Imports carregados.") 
 
@@ -15,7 +16,6 @@ from database import init_db, get_or_create_user, add_food_entry, add_weight_ent
                      update_last_interaction_date, get_last_interaction_date, get_all_users, \
                      delete_all_food_entries_for_day, get_food_entries_for_day_indexed, delete_food_entry_by_id, \
                      set_user_state, get_user_state 
-# REMOVIDO: from nutrition_api import get_nutrition_info 
 from activity_api import calculate_calories_burned
 from wit_nlp import get_wit_ai_response, parse_wit_ai_response 
 from taco_api import get_taco_nutrition 
@@ -142,21 +142,21 @@ def whatsapp_webhook():
     with app.app_context():
         update_last_interaction_date(from_number)
 
-    # --- NOVO: Gerenciamento de Estado da Conversa ---
+    # --- Gerenciamento de Estado da Conversa ---
     user_state = get_user_state(from_number)
     current_state = user_state['state']
     context_data = user_state['context_data']
 
     # Se o usuário está esperando um número de refeição para exclusão
     if current_state == 'awaiting_meal_delete_number':
-        parsed_data = parse_wit_ai_response(incoming_msg) # Tenta parsear a mensagem como número
+        parsed_data = parse_wit_ai_response(incoming_msg) 
         entry_number_list = parsed_data['entities'].get('entry_number', [])
         
         if entry_number_list:
-            chosen_index = int(entry_number_list[0]) # Pega o primeiro número
+            chosen_index = int(entry_number_list[0]) 
             
             # Recupera a lista de IDs de refeição do contexto
-            meal_ids_map = context_data.get('meal_ids_map') # {1: db_id1, 2: db_id2}
+            meal_ids_map = context_data.get('meal_ids_map') 
             
             if meal_ids_map and chosen_index in meal_ids_map:
                 meal_id_to_delete = meal_ids_map[chosen_index]
@@ -171,10 +171,10 @@ def whatsapp_webhook():
             
             # Reseta o estado do usuário após a ação
             set_user_state(from_number, 'none')
-            return str(resp) # Sai daqui, pois a ação de estado foi tratada
+            return str(resp) 
         else:
             msg.body("Não entendi qual refeição você quer excluir. Por favor, digite apenas o número da refeição na lista (ex: '1').")
-            return str(resp) # Sai daqui
+            return str(resp) 
 
     # --- Processar a mensagem com Wit.ai para Intenções Normais ---
     wit_response = get_wit_ai_response(incoming_msg) 
@@ -214,11 +214,26 @@ def whatsapp_webhook():
             
             queries_for_taco = []
             
-            food_to_quantity_map = {}
+            # --- CORREÇÃO AQUI: Definindo unique_food_names_from_entities no escopo correto ---
+            unique_food_names_from_entities = set() 
+            for food_name in food_items_list:
+                unique_food_names_from_entities.add(food_name.lower())
+            
             for q_item in quantities_list:
                 product_name = q_item.get('product')
+                if product_name:
+                    unique_food_names_from_entities.add(product_name.lower())
+            # --- FIM DA CORREÇÃO ---
+
+            # 1. Adiciona o nome do alimento puro (food_item)
+            for name in unique_food_names_from_entities:
+                queries_for_taco.append(name)
+
+            # 2. Em seguida, adiciona formatos de quantidade (se houver)
+            for q_item in quantities_list:
                 value = q_item.get('value')
                 unit = q_item.get('unit')
+                product_name = q_item.get('product') 
 
                 if value and unit and product_name:
                     queries_for_taco.append(f"{value}{unit} de {product_name}") 
@@ -226,13 +241,6 @@ def whatsapp_webhook():
                     queries_for_taco.append(f"{value}{unit} {product_name}")     
                 elif q_item.get('raw'): 
                     queries_for_taco.append(q_item['raw'])
-                
-                if product_name:
-                    food_to_quantity_map[product_name.lower()] = q_item
-            
-            for food_name in food_items_list:
-                if food_name.lower() not in food_to_quantity_map: 
-                    queries_for_taco.append(food_name)
             
             final_queries = []
             seen_queries = set()
@@ -243,7 +251,7 @@ def whatsapp_webhook():
                     seen_queries.add(normalized_q)
             
             final_queries.sort(key=lambda x: (
-                1 if x.lower() in [item.lower() for item in unique_food_names_from_entities] else 0, # CORREÇÃO: Usar unique_food_names_from_entities
+                1 if x.lower() in unique_food_names_from_entities else 0, # Agora 'unique_food_names_from_entities' está definida
                 len(x) 
             ), reverse=True) 
 
@@ -253,19 +261,14 @@ def whatsapp_webhook():
                 msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
                 return str(resp)
 
-            items_found_and_processed = [] 
+            items_found_and_processed = set() # Mudado para set para melhor verificação de duplicatas
             
             for item_query in final_queries:
-                found_in_db_already = False
-                for processed_item_original_name in items_found_and_processed:
-                    if processed_item_original_name.lower() in item_query.lower() or item_query.lower() in processed_item_original_name.lower():
-                        found_in_db_already = True
-                        break
-                if found_in_db_already:
-                    continue 
-
+                # Verifica se o alimento já foi encontrado por uma query anterior
                 taco_data = get_taco_nutrition(item_query) 
-                if taco_data and taco_data['calories'] > 0: 
+                
+                # Se encontrou dados e o alimento não foi processado ainda
+                if taco_data and taco_data['calories'] > 0 and taco_data['original_alimento'].lower() not in items_found_and_processed:
                     total_meal_calories += taco_data['calories']
                     total_meal_carbs += taco_data['carbohydrates']
                     total_meal_proteins += taco_data['proteins']
@@ -278,8 +281,10 @@ def whatsapp_webhook():
                         f"Carb: {taco_data['carbohydrates']:.0f} | Prot: {taco_data['proteins']:.0f} | "
                         f"Gord: {taco_data['fats']:.0f})"
                     )
-                    items_found_and_processed.append(taco_data['original_alimento']) 
+                    items_found_and_processed.add(taco_data['original_alimento'].lower()) # Adiciona o nome original do TACO aos processados (em minúsculas para comparação)
                 else:
+                    # Só adiciona a mensagem de "não encontrei" se o item_query não for um duplicado óbvio
+                    # e se o alimento principal dessa query ainda não tiver sido encontrado
                     is_redundant_message = False
                     for existing_item_original_name in items_found_and_processed:
                         if existing_item_original_name.lower() in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
@@ -566,4 +571,4 @@ def whatsapp_webhook():
 if __name__ == "__main__":
     print("6. Tentando rodar o aplicativo Flask.") 
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
+    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).") 
