@@ -254,6 +254,7 @@ def whatsapp_webhook():
             for item_query in final_queries:
                 taco_data = get_taco_nutrition(item_query) 
                 
+                # Se encontrou dados e o alimento não foi processado ainda
                 if taco_data and taco_data['calories'] > 0 and taco_data['original_alimento'].lower() not in items_found_and_processed:
                     total_meal_calories += taco_data['calories']
                     total_meal_carbs += taco_data['carbohydrates']
@@ -273,7 +274,8 @@ def whatsapp_webhook():
                     is_redundant_message = False
                     for existing_item_original_name in items_found_and_processed:
                         # Se a query atual contém o nome de um item já encontrado (ex: "100g de arroz" se "arroz" já foi achado)
-                        if existing_item_original_name in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
+                        # ou se o item_query é o mesmo que o original encontrado (ex: "arroz")
+                        if existing_item_original_name.lower() in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
                             is_redundant_message = True
                             break
                     
@@ -311,95 +313,6 @@ def whatsapp_webhook():
 
         else: 
             msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
-
-    elif intent == 'registrar_exercicio':
-        activity_name_list = entities.get('activity_name', []) 
-        duration_value = entities.get('duration_value')
-        duration_unit_list = entities.get('duration_unit', []) 
-
-        activity_name = activity_name_list[0] if activity_name_list else None
-        duration_unit = duration_unit_list[0] if duration_unit_list else None
-
-
-        if activity_name and duration_value and duration_unit:
-            try:
-                duration_minutes = int(duration_value)
-                if duration_unit.lower() in ['horas', 'hr', 'hora']: 
-                    duration_minutes *= 60
-
-                summary_for_weight = get_daily_summary(from_number)
-                user_weight_kg = summary_for_weight['last_weight'] if summary_for_weight['last_weight'] else 70
-
-                calories_burned = calculate_calories_burned(activity_name, duration_minutes, user_weight_kg)
-
-                if calories_burned > 0:
-                    add_exercise_entry(from_number, activity_name, duration_minutes, calories_burned)
-                    msg.body(f"Registrado: {activity_name} por {duration_value} {duration_unit}. Calorias queimadas estimadas: {calories_burned:.2f}.")
-                else:
-                    msg.body(f"Não consegui estimar as calorias para '{activity_name}'. Tente um exercício mais comum.")
-            except ValueError:
-                msg.body("Formato de duração inválido. Use números (ex: '30 minutos').")
-        else:
-            msg.body("Não consegui identificar o exercício ou a duração. Use 'Fiz [exercício] por [tempo]' (ex: 'Fiz corrida por 30 minutos').")
-
-    elif intent == 'obter_resumo_diario':
-        summary = get_daily_summary(from_number)
-        if summary:
-            food_summary = []
-            total_food_calories = 0
-            total_food_carbs = 0
-            total_food_proteins = 0
-            total_food_fats = 0
-
-            for f in summary['foods']:
-                food_summary.append(f"- {f['foods_description']} (Cal: {f['calories']:.0f} | Carb: {f['carbohydrates']:.0f} | Prot: {f['proteins']:.0f} | Gord: {f['fats']:.0f})")
-                total_food_calories += f['calories']
-                total_food_carbs += f['carbohydrates']
-                total_food_proteins += f['proteins']
-                total_food_fats += f['fats']
-            
-            food_summary_text = "\n".join(food_summary) if food_summary else 'Nenhum alimento registrado.'
-
-            exercise_summary = "\n".join([f"- {e['activity_name']} por {e['duration_minutes']} min ({e['calories_burned']:.2f} kcal) queimadas" for e in summary['exercises']])
-            weight_info = f"Seu último peso registrado: {summary['last_weight']:.1f} kg" if summary['last_weight'] else "Nenhum peso registrado."
-            total_calories_burned = sum(e['calories_burned'] for e in summary['exercises'])
-
-            response_text = (
-                f"Resumo do dia para {from_number}:\n\n"
-                f"--- Alimentação ({total_food_calories:.2f} kcal) ---\n"
-                f"{food_summary_text}\n"
-                f"(Total Carb: {total_food_carbs:.0f}g | Prot: {total_food_proteins:.0f}g | Gord: {total_food_fats:.0f}g)\n\n"
-                f"--- Exercícios ({total_calories_burned:.2f} kcal queimadas) ---\n"
-                f"{exercise_summary if exercise_summary else 'Nenhum exercício registrado.'}\n\n"
-                f"{weight_info}\n\n"
-                f"Balanço calórico estimado: {total_food_calories - total_calories_burned:.2f} kcal (Calorias Consumidas - Calorias Queimadas)"
-            )
-            msg.body(response_text)
-        else:
-            msg.body("Nenhum registro encontrado para hoje.")
-
-    elif intent == 'listar_refeicoes': 
-        summary = get_daily_summary(from_number)
-        food_summary_list = summary['foods']
-        
-        if food_summary_list:
-            response_lines = ["Suas refeições de hoje:"]
-            total_calories_consumed = 0
-            for food_entry in food_summary_list:
-                food_description = food_entry['foods_description']
-                calories = food_entry['calories']
-                carbs = food_entry['carbohydrates']
-                proteins = food_entry['proteins']
-                fats = food_entry['fats']
-
-                response_lines.append(
-                    f"- {food_description} (Cal: {calories:.0f} | Carb: {carbs:.0f} | Prot: {proteins:.0f} | Gord: {fats:.0f})"
-                )
-                total_calories_consumed += calories
-            response_lines.append(f"\nTotal de calorias consumidas hoje: {total_calories_consumed:.2f} kcal.")
-            msg.body("\n".join(response_lines))
-        else:
-            msg.body("Você ainda não registrou nenhuma refeição hoje. Use 'comi [alimento]' para registrar.")
 
     # --- Lógica para Limpar todas as refeições do dia ---
     elif intent == 'limpar_refeicoes_dia':
