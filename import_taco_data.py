@@ -42,13 +42,12 @@ def import_taco_data():
             imported_count = 0
             
             # Mapeamento de colunas do CSV para as colunas do DB
-            # AJUSTADO COM BASE NOS SEUS CABEÇALHOS ATUAIS
             column_mapping = {
                 'Descrição dos alimentos': 'alimento',
-                'Energia..kcal.': 'energia_kcal',      # AJUSTADO AQUI
-                'Proteína..g.': 'proteina_g',          # AJUSTADO AQUI
-                'Lipídeos..g.': 'lipidios_g',          # AJUSTADO AQUI
-                'Carboidrato..g.': 'carboidrato_g'      # AJUSTADO AQUI
+                'Energia..kcal.': 'energia_kcal',  
+                'Proteína..g.': 'proteina_g',      
+                'Lipídeos..g.': 'lipidios_g',          
+                'Carboidrato..g.': 'carboidrato_g'      
             }
             
             # Verificar se todos os cabeçalhos esperados estão no CSV
@@ -59,8 +58,6 @@ def import_taco_data():
                 continue
 
             for row in csv_reader:
-                # Converte os dados para float e trata valores ausentes/vazios/NAs
-                # Substitui vírgulas por pontos para números decimais
                 try:
                     alimento = row.get('Descrição dos alimentos', '').strip()
                     
@@ -69,7 +66,6 @@ def import_taco_data():
                     lipidios_g_str = row.get('Lipídeos..g.', 'NA').replace(',', '.')
                     carboidrato_g_str = row.get('Carboidrato..g.', 'NA').replace(',', '.')
 
-                    # Trata "NA" e converte para float
                     energia_kcal = float(energia_kcal_str) if energia_kcal_str not in ('NA', '') else 0.0
                     proteina_g = float(proteina_g_str) if proteina_g_str not in ('NA', '') else 0.0
                     lipidios_g = float(lipidios_g_str) if lipidios_g_str not in ('NA', '') else 0.0
@@ -80,31 +76,39 @@ def import_taco_data():
                     continue
                 except KeyError as e:
                     print(f"ERRO: Coluna '{e}' não encontrada no CSV '{csv_file}'. Verifique os cabeçalhos. Pulando arquivo.")
-                    break # Sai deste CSV e tenta o próximo
+                    break 
 
-                # Verifica se o alimento já existe (para evitar duplicatas se o CSV tiver)
                 cursor.execute("SELECT id FROM taco_foods WHERE alimento = ?", (alimento,))
                 existing_food = cursor.fetchone()
 
-                if not existing_food and alimento: # Só insere se não existir e o nome do alimento não for vazio
+                if not existing_food and alimento: 
                     try:
                         cursor.execute(
                             "INSERT INTO taco_foods (alimento, energia_kcal, proteina_g, lipidios_g, carboidrato_g) VALUES (?, ?, ?, ?, ?)",
                             (alimento, energia_kcal, proteina_g, lipidios_g, carboidrato_g)
                         )
+                        # NOVO: Commit após cada inserção para garantir persistência imediata
+                        conn.commit() 
                         imported_count += 1
                     except sqlite3.IntegrityError:
                         print(f"Aviso: Alimento '{alimento}' já existe (problema de UNIQUE). Pulando.")
+                    except Exception as e: 
+                        print(f"ERRO DE INSERÇÃO: Não foi possível inserir '{alimento}'. Erro: {e}. Linha: {row}. Pulando.")
                 
-            conn.commit()
+            # Removido conn.commit() aqui para que o commit seja feito a cada linha acima.
             total_imported_foods += imported_count
             print(f"Importados {imported_count} alimentos do arquivo '{csv_file}'.")
 
-    conn.close()
-    print(f"Importação de dados da TACO concluída. Total de alimentos importados: {total_imported_foods}.")
+    # --- NOVO: VERIFICAÇÃO FINAL DE CONTADOR DE LINHAS APÓS TODAS AS IMPORTAÇÕES ---
+    cursor.execute("SELECT COUNT(*) FROM taco_foods")
+    actual_row_count = cursor.fetchone()[0]
+    print(f"Verificação FINAL: Total REAL de linhas na tabela 'taco_foods' é {actual_row_count}.")
+    # --- FIM DA VERIFICAÇÃO ---
+
+    conn.close() # A conexão é fechada apenas no final
+    print(f"Importação de dados da TACO concluída. Total de alimentos contados pelo script: {total_imported_foods}.")
 
 if __name__ == '__main__':
-    # Importa init_db para garantir que a tabela taco_foods exista antes de importar
     from database import init_db
     init_db() 
     

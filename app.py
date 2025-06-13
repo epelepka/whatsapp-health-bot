@@ -127,7 +127,8 @@ atexit.register(lambda: scheduler.shutdown())
 with app.app_context():
     schedule_all_reminders()
 
-# --- FUNÇÃO AUXILIAR PARA EXTRAIR NOME BASE DE UMA QUERY (Adicionada AQUI) ---
+# --- FUNÇÃO AUXILIAR PARA EXTRAIR NOME BASE DE UMA QUERY ---
+# Usada para filtrar mensagens redundantes de "Não encontrei"
 def _get_base_food_name_from_query_string(query_str):
     # Tenta pegar a parte do alimento de uma string de query como "100g de arroz"
     # ou "arroz, integral, cozido" -> "arroz"
@@ -141,7 +142,7 @@ def _get_base_food_name_from_query_string(query_str):
 def whatsapp_webhook():
     incoming_msg = request.values.get('Body', '') 
     from_number = request.values.get('From', '') 
-    user_id = get_or_create_user(from_number) # Obtém o ID do usuário para o estado
+    user_id = get_or_create_user(from_number) 
 
     resp = MessagingResponse()
     msg = resp.message()
@@ -372,14 +373,14 @@ def whatsapp_webhook():
             food_summary_text = "\n".join(food_summary) if food_summary else 'Nenhum alimento registrado.'
 
             exercise_summary = "\n".join([f"- {e['activity_name']} por {e['duration_minutes']} min ({e['calories_burned']:.2f} kcal) queimadas" for e in summary['exercises']])
-            weight_info = f"Seu último peso registrado: {summary['last_weight']:.1f} kg" if summary['last_weight'] else "Nenhum peso registrado."
+            weight_info = f"Seu último peso registrado: {summary['last_weight']:.1f} kg" if summary['last_last_interaction_date'] else "Nenhum peso registrado."
             total_calories_burned = sum(e['calories_burned'] for e in summary['exercises'])
 
             response_text = (
                 f"Resumo do dia para {from_number}:\n\n"
                 f"--- Alimentação ({total_food_calories:.2f} kcal) ---\n"
                 f"{food_summary_text}\n"
-                f"(Total Carb: {total_food_carbs:.0f}g | Prot: {total_food_proteins:.0f}g | Gord: {total_food_fats:.0f}g)\n\n"
+                f"(Total Carb: {total_food_carbs:.0f}g | Prot: {total_food_proteins:.0f}g | | Gord: {total_food_fats:.0f}g)\n\n"
                 f"--- Exercícios ({total_calories_burned:.2f} kcal queimadas) ---\n"
                 f"{exercise_summary if exercise_summary else 'Nenhum exercício registrado.'}\n\n"
                 f"{weight_info}\n\n"
@@ -562,4 +563,4 @@ def whatsapp_webhook():
 if __name__ == "__main__":
     print("6. Tentando rodar o aplicativo Flask.") 
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).") 
+    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
