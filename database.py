@@ -13,12 +13,10 @@ def get_db_connection():
     """Retorna uma conexão com o banco de dados PostgreSQL."""
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL não está configurada! Não é possível conectar ao PostgreSQL.")
-    
-    conn = psycopg2.connect(DATABASE_URL)
-    # A psycopg2.extras.DictCursor (ou RealDictCursor) é como conn.row_factory=sqlite3.Row
-    # mas precisa ser importada e usada com o cursor.
-    # Por simplicidade, vamos pegar tuplas e mapear manualmente para dicionários se necessário
-    return conn
+
+    # O psycopg2 precisa do SSLMode 'require' ou 'no-verify' para conexões externas
+    # Railway geralmente pede require
+    return psycopg2.connect(DATABASE_URL + "?sslmode=require") # Adicionado sslmode=require
 
 def init_db():
     """Inicializa o esquema do banco de dados (cria tabelas se não existirem)."""
@@ -93,7 +91,7 @@ def init_db():
             user_id INTEGER NOT NULL REFERENCES users(id),
             reminder_text TEXT NOT NULL,
             reminder_time TEXT NOT NULL,
-            is_active BOOLEAN DEFAULT TRUE -- TRUE para booleanos no PostgreSQL
+            is_active BOOLEAN DEFAULT TRUE 
         );
     ''')
 
@@ -123,11 +121,7 @@ def init_db():
     conn.close()
 
 # --- Funções de CRUD (adaptadas para PostgreSQL) ---
-# Em PostgreSQL, para pegar o resultado como dicionário, pode usar DictCursor ou mapear manualmente.
-# Para simplicidade e compatibilidade com o retorno de 'Row' do SQLite, faremos um mapeamento manual.
-
 def _fetch_one_as_dict(cursor):
-    """Helper para buscar uma linha como dicionário."""
     row = cursor.fetchone()
     if row:
         desc = cursor.description
@@ -135,7 +129,6 @@ def _fetch_one_as_dict(cursor):
     return None
 
 def _fetch_all_as_dict(cursor):
-    """Helper para buscar todas as linhas como lista de dicionários."""
     rows = cursor.fetchall()
     if not rows:
         return []
@@ -146,17 +139,17 @@ def _fetch_all_as_dict(cursor):
 def get_or_create_user(whatsapp_number):
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT id FROM users WHERE whatsapp_number = %s", (whatsapp_number,))
     user = _fetch_one_as_dict(cursor)
-    
+
     if user:
         cursor.close()
         conn.close()
         return user['id']
     else:
-        cursor.execute("INSERT INTO users (whatsapp_number) VALUES (%s) RETURNING id", (whatsapp_number,)) # RETURNING id para pegar o ID gerado
-        user_id = cursor.fetchone()[0] # Pega o ID retornado
+        cursor.execute("INSERT INTO users (whatsapp_number) VALUES (%s) RETURNING id", (whatsapp_number,))
+        user_id = cursor.fetchone()[0]
         conn.commit()
         cursor.close()
         conn.close()
@@ -187,14 +180,14 @@ def get_last_interaction_date(whatsapp_number):
     cursor.close()
     conn.close()
     if result and result['last_interaction_date']:
-        return result['last_interaction_date'] # PostgreSQL retorna como objeto date
+        return result['last_interaction_date'] 
     return None
 
 def get_all_users():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT whatsapp_number FROM users")
-    users = [row[0] for row in cursor.fetchall()] # Pega apenas a primeira coluna (whatsapp_number)
+    users = [row[0] for row in cursor.fetchall()]
     cursor.close()
     conn.close()
     return users
@@ -239,36 +232,33 @@ def get_daily_summary(whatsapp_number):
     user_id = get_or_create_user(whatsapp_number)
     conn = get_db_connection()
     cursor = conn.cursor()
-    today_date_str = date.today().strftime('%Y-%m-%d')
-
-    summary = {
-        'foods': [],
-        'exercises': [],
-        'last_weight': None
-    }
 
     cursor.execute(
         "SELECT foods_description, calories, carbohydrates, proteins, fats FROM food_entries WHERE user_id = %s AND entry_date = CURRENT_DATE",
         (user_id,)
     )
-    summary['foods'] = _fetch_all_as_dict(cursor)
+    summary_foods = _fetch_all_as_dict(cursor)
 
     cursor.execute(
         "SELECT activity_name, duration_minutes, calories_burned FROM exercise_entries WHERE user_id = %s AND entry_date = CURRENT_DATE",
         (user_id,)
     )
-    summary['exercises'] = _fetch_all_as_dict(cursor)
+    summary_exercises = _fetch_all_as_dict(cursor)
 
     cursor.execute(
         "SELECT weight FROM weight_entries WHERE user_id = %s ORDER BY entry_date DESC, entry_time DESC LIMIT 1",
         (user_id,)
     )
     last_weight_row = _fetch_one_as_dict(cursor)
-    if last_weight_row:
-        summary['last_weight'] = last_weight_row['weight']
 
     cursor.close()
     conn.close()
+
+    summary = {
+        'foods': summary_foods,
+        'exercises': summary_exercises,
+        'last_weight': last_weight_row['weight'] if last_weight_row else None
+    }
     return summary
 
 def set_goal(whatsapp_number, goal_type, target_value):
@@ -303,7 +293,6 @@ def add_reminder(whatsapp_number, reminder_text, reminder_time_str):
     cursor = conn.cursor()
 
     try:
-        # PostgreSQL precisa do formato correto para TIME
         time_obj = datetime.strptime(reminder_time_str, '%H:%M').time()
     except ValueError:
         return False
@@ -320,7 +309,6 @@ def add_reminder(whatsapp_number, reminder_text, reminder_time_str):
 def get_active_reminders():
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Junta reminders com users para pegar o whatsapp_number
     cursor.execute(
         "SELECT r.reminder_text, r.reminder_time, u.whatsapp_number "
         "FROM reminders r JOIN users u ON r.user_id = u.id "
@@ -394,118 +382,3 @@ def delete_food_entry_by_id(entry_id):
     cursor.close()
     conn.close()
     return rows_deleted
-
-# --- Funções para TACO (adaptadas para PostgreSQL) ---
-# A função get_taco_nutrition buscará diretamente no PostgreSQL
-def get_taco_nutrition(query):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    alimento_base = None
-    quantidade_g = 100.0
-
-    match_quantity = re.search(r'(\d+)\s*(g|gramas|ml|litro|xicara|copo)?\s*(de|do|da|dos|das)?\s*(.+)', query, re.IGNORECASE)
-    
-    if match_quantity:
-        value = float(match_quantity.group(1))
-        unit = match_quantity.group(2).lower() if match_quantity.group(2) else 'g'
-        alimento_base = match_quantity.group(4).strip() 
-
-        if unit in ['g', 'gramas']:
-            quantidade_g = value
-        elif unit in ['ml', 'litro']:
-            if unit == 'litro': quantidade_g = value * 1000
-            else: quantidade_g = value
-        elif unit in ['xicara', 'copo']:
-            if unit == 'xicara': quantidade_g = value * 180 
-            else: quantidade_g = value * 200 
-        else:
-            quantidade_g = 100.0 
-    else:
-        alimento_base = query.strip() 
-
-    if not alimento_base:
-        cursor.close()
-        conn.close()
-        return None
-
-    found_food = None
-
-    def normalize_string(s):
-        if not isinstance(s, str): return ""
-        s = s.lower()
-        s = re.sub(r'[áàãâä]', 'a', s)
-        s = re.sub(r'[éèêë]', 'e', s)
-        s = re.sub(r'[íìîï]', 'i', s)
-        s = re.sub(r'[óòõôö]', 'o', s)
-        s = re.sub(r'[úùûü]', 'u', s)
-        s = re.sub(r'[ç]', 'c', s)
-        s = re.sub(r'[^a-z0-9\s,]', '', s)
-        return s
-
-    alimento_base_normalized = normalize_string(alimento_base)
-    
-    search_queries = [
-        alimento_base.replace(",", "").strip(), 
-        alimento_base.strip(), 
-        normalize_string(alimento_base).replace(",", "").strip(), 
-        f"%{alimento_base}%", 
-        f"%{alimento_base.replace(' ', '%')}%", 
-        f"%{alimento_base_normalized}%", 
-        f"%{alimento_base_normalized.replace(' ', '%')}%" 
-    ]
-    
-    generic_alimento_base = alimento_base.split(',')[0].strip()
-    if generic_alimento_base.lower() != alimento_base.lower() and generic_alimento_base not in search_queries:
-        search_queries.append(generic_alimento_base)
-        search_queries.append(normalize_string(generic_alimento_base))
-        search_queries.append(f"%{generic_alimento_base}%")
-        search_queries.append(f"%{normalize_string(generic_alimento_base)}%")
-
-    final_search_terms = []
-    seen_terms = set()
-    for term in search_queries:
-        normalized_term_for_set = normalize_string(term)
-        if normalized_term_for_set not in seen_terms and term.strip():
-            final_search_terms.append(term.strip())
-            seen_terms.add(normalized_term_for_set)
-    
-    final_search_terms.sort(key=lambda x: (
-        x.count('%'), 
-        -len(x)       
-    ))
-
-    for term in final_search_terms:
-        # Para PostgreSQL, use ILIKE para busca case-insensitive e %s para parâmetros
-        cursor.execute("SELECT * FROM taco_foods WHERE alimento ILIKE %s LIMIT 1", (term,)) 
-        found_food = _fetch_one_as_dict(cursor)
-        if found_food:
-            print(f"DEBUG TACO: Encontrado '{found_food['alimento']}' para busca '{term}'.")
-            break
-
-    if found_food:
-        proportion = quantidade_g / 100.0
-
-        calories = found_food['energia_kcal'] * proportion
-        proteins = found_food['proteina_g'] * proportion
-        fats = found_food['lipidios_g'] * proportion
-        carbohydrates = found_food['carboidrato_g'] * proportion
-
-        food_description_for_output = f"{quantidade_g:.0f}g de {found_food['alimento']}" \
-                                      if quantidade_g != 100.0 else found_food['alimento']
-
-
-        cursor.close()
-        conn.close()
-        return {
-            'calories': calories,
-            'carbohydrates': carbohydrates,
-            'proteins': proteins,
-            'fats': fats,
-            'foods_listed': food_description_for_output,
-            'original_alimento': found_food['alimento'] 
-        }
-    else:
-        cursor.close()
-        conn.close()
-        return None

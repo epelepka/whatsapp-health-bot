@@ -3,3 +3,4 @@ twilio
 python-dotenv
 requests
 APScheduler
+psycopg2-binary # NOVO: Driver PostgreSQL
