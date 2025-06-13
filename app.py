@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import re
 from datetime import datetime, date, time
-import json # Para serializar/desserializar o contexto do estado
+import json 
 
 print("1. Imports carregados.") 
 
@@ -25,9 +25,9 @@ print("2. Funções do banco de dados e APIs importadas.")
 # Para agendamento de tarefas
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import atexit # Para garantir que o agendador seja desligado corretamente
+import atexit 
 
-load_dotenv() # Carrega as variáveis de ambiente do arquivo .env
+load_dotenv() 
 
 app = Flask(__name__)
 
@@ -269,9 +269,11 @@ def whatsapp_webhook():
                     )
                     items_found_and_processed.add(taco_data['original_alimento'].lower()) 
                 else:
+                    # Ajuste para evitar mensagens redundantes de "Não encontrei" para alimentos que já foram encontrados
                     is_redundant_message = False
                     for existing_item_original_name in items_found_and_processed:
-                        if existing_item_original_name.lower() in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
+                        # Se a query atual contém o nome de um item já encontrado (ex: "100g de arroz" se "arroz" já foi achado)
+                        if existing_item_original_name in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
                             is_redundant_message = True
                             break
                     
@@ -399,159 +401,160 @@ def whatsapp_webhook():
         else:
             msg.body("Você ainda não registrou nenhuma refeição hoje. Use 'comi [alimento]' para registrar.")
 
-    # --- Lógica para Limpar todas as refeições do dia ---
-    elif intent == 'limpar_refeicoes_dia':
-        deleted_count = delete_all_food_entries_for_day(from_number)
-        if deleted_count > 0:
-            msg.body(f"Todas as {deleted_count} refeições de hoje foram excluídas com sucesso!")
-        else:
-            msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
-    
-    # --- Lógica para Excluir refeição específica ---
-    elif intent == 'excluir_refeicao_especifica':
-        entry_number_list = entities.get('entry_number', [])
-        
-        if entry_number_list: # Se o usuário já informou o número na mesma frase (ex: "excluir refeição 1")
-            chosen_index = int(entry_number_list[0])
-            
-            # Pega as refeições para mapear o índice ao ID do DB
-            current_meals = get_food_entries_for_day_indexed(from_number)
-            meal_ids_map = { (i+1): meal['id'] for i, meal in enumerate(current_meals) }
-            
-            if meal_ids_map and chosen_index in meal_ids_map:
-                meal_id_to_delete = meal_ids_map[chosen_index]
-                deleted_rows = delete_food_entry_by_id(meal_id_to_delete)
-                
-                if deleted_rows > 0:
-                    msg.body(f"Refeição número {chosen_index} excluída com sucesso!")
-                else:
-                    msg.body("Não foi possível excluir a refeição. Tente novamente.")
-            else:
-                msg.body("Número de refeição inválido. Por favor, digite um número que esteja na sua lista de refeições do dia.")
-            
-            # Reseta o estado do usuário (se ele usou "excluir refeição X", o estado não foi setado para aguardar)
-            set_user_state(from_number, 'none') # Garante que o estado seja limpo após a ação
-            
-        else: # Se o usuário disse apenas "excluir refeição", sem número. INICIA O PROCESSO MULTI-TURN
-            meals_today = get_food_entries_for_day_indexed(from_number)
-            
-            if not meals_today:
-                msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
-                # Reseta o estado
-                set_user_state(from_number, 'none')
-            else:
-                response_lines = ["Suas refeições de hoje:"]
-                meal_ids_map = {} # Mapeia índice do usuário para ID do DB
-                for i, meal in enumerate(meals_today):
-                    response_lines.append(f"{i+1}: {meal['foods_description']} ({meal['calories']:.0f} kcal)")
-                    meal_ids_map[i+1] = meal['id'] # Armazena o ID real do DB
-                
-                response_lines.append("\nQual refeição você quer excluir? Por favor, envie APENAS o número (ex: '1').")
-                
-                # Seta o estado do usuário para aguardar o número, e guarda o mapa de IDs
-                set_user_state(from_number, 'awaiting_meal_delete_number', meal_ids_map)
-                
-                msg.body("\n".join(response_lines))
+    # --- Lógica para Limpar todas as refeições do dia ---
+    elif intent == 'limpar_refeicoes_dia':
+        deleted_count = delete_all_food_entries_for_day(from_number)
+        if deleted_count > 0:
+            msg.body(f"Todas as {deleted_count} refeições de hoje foram excluídas com sucesso!")
+        else:
+            msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
+    
+    # --- Lógica para Excluir refeição específica ---
+    elif intent == 'excluir_refeicao_especifica':
+        entry_number_list = entities.get('entry_number', [])
+        
+        if entry_number_list: # Se o usuário já informou o número na mesma frase (ex: "excluir refeição 1")
+            chosen_index = int(entry_number_list[0])
+            
+            # Pega as refeições para mapear o índice ao ID do DB
+            current_meals = get_food_entries_for_day_indexed(from_number)
+            meal_ids_map = { (i+1): meal['id'] for i, meal in enumerate(current_meals) }
+            
+            if meal_ids_map and chosen_index in meal_ids_map:
+                meal_id_to_delete = meal_ids_map[chosen_index]
+                deleted_rows = delete_food_entry_by_id(meal_id_to_delete)
+                
+                if deleted_rows > 0:
+                    msg.body(f"Refeição número {chosen_index} excluída com sucesso!")
+                else:
+                    msg.body("Não foi possível excluir a refeição. Tente novamente.")
+            else:
+                msg.body("Número de refeição inválido. Por favor, digite um número que esteja na sua lista de refeições do dia.")
+            
+            # Reseta o estado do usuário (se ele usou "excluir refeição X", o estado não foi setado para aguardar)
+            set_user_state(from_number, 'none') # Garante que o estado seja limpo após a ação
+            
+        else: # Se o usuário disse apenas "excluir refeição", sem número. INICIA O PROCESSO MULTI-TURN
+            meals_today = get_food_entries_for_day_indexed(from_number)
+            
+            if not meals_today:
+                msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
+                # Reseta o estado
+                set_user_state(from_number, 'none')
+            else:
+                response_lines = ["Suas refeições de hoje:"]
+                meal_ids_map = {} # Mapeia índice do usuário para ID do DB
+                for i, meal in enumerate(meals_today):
+                    response_lines.append(f"{i+1}: {meal['foods_description']} ({meal['calories']:.0f} kcal)")
+                    meal_ids_map[i+1] = meal['id'] # Armazena o ID real do DB
+                
+                response_lines.append("\nQual refeição você quer excluir? Por favor, envie APENAS o número (ex: '1').")
+                
+                # Seta o estado do usuário para aguardar o número, e guarda o mapa de IDs
+                set_user_state(from_number, 'awaiting_meal_delete_number', meal_ids_map)
+                
+                msg.body("\n".join(response_lines))
 
-    elif intent == 'definir_lembrete':
-        reminder_text_list = entities.get('reminder_text', [])
-        wit_time_obj = entities.get('wit_time') 
-        
-        reminder_text = reminder_text_list[0] if reminder_text_list else None
+    elif intent == 'definir_lembrete':
+        reminder_text_list = entities.get('reminder_text', [])
+        wit_time_obj = entities.get('wit_time') 
+        
+        reminder_text = reminder_text_list[0] if reminder_text_list else None
 
-        reminder_time_str = None
-        if wit_time_obj:
-            try:
-                if 'T' in wit_time_obj and ':' in wit_time_obj: 
-                    time_part = wit_time_obj.split('T')[1].split(':')[0:2] 
-                    reminder_time_str = ":".join(time_part)
-                elif re.match(r'^\d{2}:\d{2}<span class="math-inline">', wit\_time\_obj\)\: 
-reminder\_time\_str \= wit\_time\_obj
-else\: 
-dt\_object \= datetime\.fromisoformat\(wit\_time\_obj\.replace\('Z', '\+00\:00'\)\) 
-reminder\_time\_str \= dt\_object\.strftime\('%H\:%M'\)
-except Exception as e\: 
-print\(f"Erro ao parsear wit\_time\_obj '\{wit\_time\_obj\}'\: \{e\}"\)
-if re\.match\(r'^\\d\{2\}\:\\d\{2\}</span>', wit_time_obj):
-                    reminder_time_str = wit_time_obj
+        reminder_time_str = None
+        if wit_time_obj:
+            try:
+                if 'T' in wit_time_obj and ':' in wit_time_obj: 
+                    time_part = wit_time_obj.split('T')[1].split(':')[0:2] 
+                    reminder_time_str = ":".join(time_part)
+                elif re.match(r'^\d{2}:\d{2}$', wit_time_obj): 
+                     reminder_time_str = wit_time_obj
+                else: 
+                    dt_object = datetime.fromisoformat(wit_time_obj.replace('Z', '+00:00')) 
+                    reminder_time_str = dt_object.strftime('%H:%M')
+
+            except Exception as e: 
+                print(f"Erro ao parsear wit_time_obj '{wit_time_obj}': {e}")
+                if re.match(r'^\d{2}:\d{2}$', wit_time_obj):
+                    reminder_time_str = wit_time_obj
 
 
-        if reminder_text and reminder_time_str:
-            if add_reminder(from_number, reminder_text, reminder_time_str):
-                scheduler.remove_all_jobs()
-                scheduler.add_job(
-                    send_good_morning_message,
-                    CronTrigger(hour=8, minute=0),
-                    id='daily_good_morning',
-                    replace_existing=True
-                )
-                with app.app_context():
-                    schedule_all_reminders()
-                msg.body(f"Lembrete '{reminder_text}' às {reminder_time_str} desativado com sucesso.")
-            else:
-                msg.body("Não consegui definir o lembrete. Verifique o formato da hora (HH:MM).")
-        else:
-            msg.body("Não consegui identificar o texto ou a hora do lembrete. Use 'Definir lembrete [texto] [HH:MM]' (ex: 'Definir lembrete beber agua 10:00').")
+        if reminder_text and reminder_time_str:
+            if add_reminder(from_number, reminder_text, reminder_time_str):
+                scheduler.remove_all_jobs()
+                scheduler.add_job(
+                    send_good_morning_message,
+                    CronTrigger(hour=8, minute=0),
+                    id='daily_good_morning',
+                    replace_existing=True
+                )
+                with app.app_context():
+                    schedule_all_reminders()
+                msg.body(f"Lembrete '{reminder_text}' definido para as {reminder_time_str} com sucesso!")
+            else:
+                msg.body("Não consegui definir o lembrete. Verifique o formato da hora (HH:MM).")
+        else:
+            msg.body("Não consegui identificar o texto ou a hora do lembrete. Use 'Definir lembrete [texto] [HH:MM]' (ex: 'Definir lembrete beber agua 10:00').")
 
-    elif intent == 'listar_lembretes': 
-        reminders = get_user_reminders(from_number)
-        if reminders:
-            response_lines = ["Seus lembretes ativos:"]
-            for r in reminders:
-                response_lines.append(f"- '{r['reminder_text']}' às {r['reminder_time']}")
-            response_lines.append("\nPara desativar um, diga 'Desativar lembrete [texto] [HH:MM]'.")
-            msg.body("\n".join(response_lines))
-        else:
-            msg.body("Você não tem lembretes ativos. Use 'definir lembrete' para criar um.")
+    elif intent == 'listar_lembretes': 
+        reminders = get_user_reminders(from_number)
+        if reminders:
+            response_lines = ["Seus lembretes ativos:"]
+            for r in reminders:
+                response_lines.append(f"- '{r['reminder_text']}' às {r['reminder_time']}")
+            response_lines.append("\nPara desativar um, diga 'Desativar lembrete [texto] [HH:MM]'.")
+            msg.body("\n".join(response_lines))
+        else:
+            msg.body("Você não tem lembretes ativos. Use 'definir lembrete' para criar um.")
 
-    elif intent == 'desativar_lembrete': 
-        reminder_text_list = entities.get('reminder_text', [])
-        wit_time_obj = entities.get('wit_time')
-        
-        reminder_text = reminder_text_list[0] if reminder_text_list else None
-        
-        reminder_time_str = None
-        if wit_time_obj:
-            try:
-                if 'T' in wit_time_obj and ':' in wit_time_obj:
-                    time_part = wit_time_obj.split('T')[1].split(':')[0:2]
-                    reminder_time_str = ":".join(time_part)
-                elif re.match(r'^\d{2}:\d{2}<span class="math-inline">', wit\_time\_obj\)\:
-reminder\_time\_str \= wit\_time\_obj
-else\:
-dt\_object \= datetime\.fromisoformat\(wit\_time\_obj\.replace\('Z', '\+00\:00'\)\)
-reminder\_time\_str \= dt\_object\.strftime\('%H\:%M'\)
-except Exception as e\:
-print\(f"Erro ao parsear wit\_time\_obj '\{wit\_time\_obj\}'\: \{e\}"\)
-if re\.match\(r'^\\d\{2\}\:\\d\{2\}</span>', wit_time_obj):
-                    reminder_time_str = wit_time_obj
+    elif intent == 'desativar_lembrete': 
+        reminder_text_list = entities.get('reminder_text', [])
+        wit_time_obj = entities.get('wit_time')
+        
+        reminder_text = reminder_text_list[0] if reminder_text_list else None
+        
+        reminder_time_str = None
+        if wit_time_obj:
+            try:
+                if 'T' in wit_time_obj and ':' in wit_time_obj:
+                    time_part = wit_time_obj.split('T')[1].split(':')[0:2]
+                    reminder_time_str = ":".join(time_part)
+                elif re.match(r'^\d{2}:\d{2}$', wit_time_obj):
+                     reminder_time_str = wit_time_obj
+                else:
+                    dt_object = datetime.fromisoformat(wit_time_obj.replace('Z', '+00:00'))
+                    reminder_time_str = dt_object.strftime('%H:%M')
+            except Exception as e:
+                print(f"Erro ao parsear wit_time_obj '{wit_time_obj}': {e}")
+                if re.match(r'^\d{2}:\d{2}$', wit_time_obj):
+                    reminder_time_str = wit_time_obj
 
-        if reminder_text and reminder_time_str:
-            if add_reminder(from_number, reminder_text, reminder_time_str):
-                scheduler.remove_all_jobs()
-                scheduler.add_job(
-                    send_good_morning_message,
-                    CronTrigger(hour=8, minute=0),
-                    id='daily_good_morning',
-                    replace_existing=True
-                )
-                with app.app_context():
-                    schedule_all_reminders()
-                msg.body(f"Lembrete '{reminder_text}' às {reminder_time_str} desativado com sucesso.")
-            else:
-                msg.body("Não encontrei esse lembrete para desativar. Verifique o texto e a hora.")
-        else:
-            msg.body("Não consegui identificar o texto ou a hora do lembrete a desativar. Use 'Desativar lembrete [texto] [HH:MM]'.")
+        if reminder_text and reminder_time_str:
+            if deactivate_reminder(from_number, reminder_text, reminder_time_str):
+                scheduler.remove_all_jobs()
+                scheduler.add_job(
+                    send_good_morning_message,
+                    CronTrigger(hour=8, minute=0),
+                    id='daily_good_morning',
+                    replace_existing=True
+                )
+                with app.app_context():
+                    schedule_all_reminders()
+                msg.body(f"Lembrete '{reminder_text}' às {reminder_time_str} desativado com sucesso.")
+            else:
+                msg.body("Não encontrei esse lembrete para desativar. Verifique o texto e a hora.")
+        else:
+            msg.body("Não consegui identificar o texto ou a hora do lembrete a desativar. Use 'Desativar lembrete [texto] [HH:MM]'.")
 
-    elif intent == 'saudacao': 
-        msg.body("Olá! Eu sou seu assistente de saúde. Como posso te ajudar hoje?")
+    elif intent == 'saudacao': 
+        msg.body("Olá! Eu sou seu assistente de saúde. Como posso te ajudar hoje?")
 
-    else: # Intenção não reconhecida
-        msg.body("Desculpe, não entendi o que você quis dizer. Por favor, tente de outra forma ou use um dos comandos: registrar peso, comi, fiz exercicio, resumo diario, minhas refeicoes, definir meta, definir lembrete, meus lembretes.")
+    else: # Intenção não reconhecida
+        msg.body("Desculpe, não entendi o que você quis dizer. Por favor, tente de outra forma ou use um dos comandos: registrar peso, comi, fiz exercicio, resumo diario, minhas refeicoes, definir meta, definir lembrete, meus lembretes.")
 
-    return str(resp)
+    return str(resp)
 
 if __name__ == "__main__":
-    print("6. Tentando rodar o aplicativo Flask.") 
-    app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
+    print("6. Tentando rodar o aplicativo Flask.") 
+    app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
+    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).")
