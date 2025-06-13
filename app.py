@@ -1,21 +1,28 @@
-# app.py
-from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client
-import os
-from dotenv import load_dotenv
-import re
-from datetime import datetime, date, time
+# app.py (somente as primeiras linhas, focando nas importações)
 
-print("1. Imports carregados.") 
+# ... (imports existentes) ...
+
+# Importa as funções que criaremos
+from database import init_db, get_or_create_user, add_food_entry, add_weight_entry, add_exercise_entry, get_daily_summary, \
+                     set_goal, get_goal, add_reminder, get_active_reminders, get_user_reminders, deactivate_reminder, \
+                     update_last_interaction_date, get_last_interaction_date, get_all_users, \
+                     delete_all_food_entries_for_day, get_food_entries_for_day_indexed, delete_food_entry_by_id, \
+                     set_user_state, get_user_state # NOVAS FUNÇÕES DE DB E ESTADO
+# REMOVIDO: from nutrition_api import get_nutrition_info 
+from activity_api import calculate_calories_burned
+from wit_nlp import get_wit_ai_response, parse_wit_ai_response 
+from taco_api import get_taco_nutrition 
+
 
 # Importa as funções que criaremos
 from database import init_db, add_food_entry, add_weight_entry, add_exercise_entry, get_daily_summary, \
                      set_goal, get_goal, add_reminder, get_active_reminders, get_user_reminders, deactivate_reminder, \
-                     update_last_interaction_date, get_last_interaction_date, get_all_users
-from nutrition_api import get_nutrition_info
+                     update_last_interaction_date, get_last_interaction_date, get_all_users, \
+                     delete_all_food_entries_for_day, get_food_entries_for_day_indexed, delete_food_entry_by_id, \
+                     set_user_state, get_user_state
 from activity_api import calculate_calories_burned
-from wit_nlp import get_wit_ai_response, parse_wit_ai_response # Importa as funções do wit_nlp
+from wit_nlp import get_wit_ai_response, parse_wit_ai_response 
+from taco_api import get_taco_nutrition 
 
 print("2. Funções do banco de dados e APIs importadas.") 
 
@@ -126,8 +133,9 @@ with app.app_context():
 
 @app.route("/webhook", methods=['POST'])
 def whatsapp_webhook():
-    incoming_msg = request.values.get('Body', '') # Removido .lower() aqui para o Wit.ai processar melhor
-    from_number = request.values.get('From', '') # Número do usuário (whatsapp:+XXXXXXXX)
+    incoming_msg = request.values.get('Body', '') 
+    from_number = request.values.get('From', '') 
+    user_id = get_or_create_user(from_number) # Obtém o ID do usuário para o estado
 
     resp = MessagingResponse()
     msg = resp.message()
@@ -138,8 +146,42 @@ def whatsapp_webhook():
     with app.app_context():
         update_last_interaction_date(from_number)
 
-    # --- Processar a mensagem com Wit.ai ---
-    wit_response = get_wit_ai_response(incoming_msg) # Envia a mensagem original (não .lower())
+    # --- NOVO: Gerenciamento de Estado da Conversa ---
+    user_state = get_user_state(from_number)
+    current_state = user_state['state']
+    context_data = user_state['context_data']
+
+    # Se o usuário está esperando um número de refeição para exclusão
+    if current_state == 'awaiting_meal_delete_number':
+        parsed_data = parse_wit_ai_response(incoming_msg) # Tenta parsear a mensagem como número
+        entry_number_list = parsed_data['entities'].get('entry_number', [])
+        
+        if entry_number_list:
+            chosen_index = int(entry_number_list[0]) # Pega o primeiro número
+            
+            # Recupera a lista de IDs de refeição do contexto
+            meal_ids_map = context_data.get('meal_ids_map') # {1: db_id1, 2: db_id2}
+            
+            if meal_ids_map and chosen_index in meal_ids_map:
+                meal_id_to_delete = meal_ids_map[chosen_index]
+                deleted_rows = delete_food_entry_by_id(meal_id_to_delete)
+                
+                if deleted_rows > 0:
+                    msg.body(f"Refeição número {chosen_index} excluída com sucesso!")
+                else:
+                    msg.body("Não foi possível excluir a refeição. Tente novamente.")
+            else:
+                msg.body("Número de refeição inválido. Por favor, digite um número da lista.")
+            
+            # Reseta o estado do usuário após a ação
+            set_user_state(from_number, 'none')
+            return str(resp) # Sai daqui, pois a ação de estado foi tratada
+        else:
+            msg.body("Não entendi qual refeição você quer excluir. Por favor, digite apenas o número da refeição na lista (ex: '1').")
+            return str(resp) # Sai daqui
+
+    # --- Processar a mensagem com Wit.ai para Intenções Normais ---
+    wit_response = get_wit_ai_response(incoming_msg) 
     parsed_data = parse_wit_ai_response(wit_response)
     
     intent = parsed_data['intent']
@@ -162,25 +204,20 @@ def whatsapp_webhook():
             msg.body("Não consegui encontrar o valor do peso. Por favor, diga seu peso (ex: 'Meu peso é 75.5').")
 
     elif intent == 'registrar_refeicao':
-        # food_item será uma lista de nomes de alimentos (ex: ['batata', 'frango'])
         food_items_list = entities.get('food_item', []) 
-        # quantity será uma lista de dicionários de quantidades (ex: [{'value': 100, 'unit': 'gram', 'product': 'batata'}])
         quantities_list = entities.get('quantity', []) 
 
-        if food_items_list or quantities_list: # Continua se pelo menos algo foi detectado
+        if food_items_list or quantities_list: 
             total_meal_calories = 0
             total_meal_carbs = 0
             total_meal_proteins = 0
             total_meal_fats = 0
             foods_for_db = [] 
             
-            response_lines = ["Refeição registrada:"] # Para a resposta detalhada ao usuário
+            response_lines = ["Refeição registrada:"] 
             
-            # --- Construir uma lista de itens para consultar a Nutritionix ---
-            # Prioriza a informação de 'product' da entidade quantity e também tenta formatos flexíveis
-            queries_for_nutritionix = []
+            queries_for_taco = []
             
-            # Mapeia food_items para quantities para facilitar a combinação
             food_to_quantity_map = {}
             for q_item in quantities_list:
                 product_name = q_item.get('product')
@@ -188,59 +225,77 @@ def whatsapp_webhook():
                 unit = q_item.get('unit')
 
                 if value and unit and product_name:
-                    # Tenta "VALOR UNIDADE PRODUTO" (ex: "100g batata")
-                    queries_for_nutritionix.append(f"{value}{unit} {product_name}")
-                    # Tenta "VALOR UNIDADE de PRODUTO" (ex: "100g de batata")
-                    queries_for_nutritionix.append(f"{value} {unit} de {product_name}")
-                elif q_item.get('raw'): # Se não tem produto, mas tem o texto bruto da entidade wit/quantity
-                    queries_for_nutritionix.append(q_item['raw'])
+                    queries_for_taco.append(f"{value}{unit} de {product_name}") 
+                    queries_for_taco.append(f"{value} {unit} de {product_name}") 
+                elif q_item.get('raw'): 
+                    queries_for_taco.append(q_item['raw'])
                 
                 if product_name:
                     food_to_quantity_map[product_name.lower()] = q_item
             
-            # Adiciona food_items puros que não foram cobertos pelas quantities (ex: "salada", "arroz", "contrafile")
-            # Isso é crucial para itens que podem não ter vindo com quantidade ou que a Nutritionix prefere assim
             for food_name in food_items_list:
-                if food_name.lower() not in food_to_quantity_map: # Evita adicionar se já coberto por uma quantity
-                    queries_for_nutritionix.append(food_name)
+                if food_name.lower() not in food_to_quantity_map: 
+                    queries_for_taco.append(food_name)
             
-            # Remove duplicatas e mantém ordem (importante para evitar consultas repetidas)
             final_queries = []
             seen_queries = set()
-            for q in queries_for_nutritionix:
+            for q in queries_for_taco:
                 normalized_q = q.lower()
                 if normalized_q not in seen_queries:
                     final_queries.append(q)
                     seen_queries.add(normalized_q)
+            
+            final_queries.sort(key=lambda x: (
+                x.count(' '),         
+                len(x),               
+                'g' in x.lower() or 'grama' in x.lower(), 
+                'ml' in x.lower() or 'litro' in x.lower()
+            ))
 
-            print(f"Consultando Nutritionix com: {final_queries}") # NOVO: log para ver as consultas enviadas
+            print(f"Consultando TACO com: {final_queries}") 
 
-            if not final_queries: # Se após toda a lógica, não há itens para consultar
-                msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e frango').")
+            if not final_queries: 
+                msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
                 return str(resp)
 
-
+            items_found_and_processed = [] 
+            
             for item_query in final_queries:
-                nutrition_data = get_nutrition_info(item_query)
-                if nutrition_data and nutrition_data['calories'] > 0: # Adicionado 'calories > 0' para filtrar resultados vazios/irrelevantes
-                    total_meal_calories += nutrition_data['calories']
-                    total_meal_carbs += nutrition_data['carbohydrates']
-                    total_meal_proteins += nutrition_data['proteins']
-                    total_meal_fats += nutrition_data['fats']
-                    foods_for_db.append(nutrition_data['foods_listed']) 
+                found_in_db_already = False
+                for processed_item in items_found_and_processed:
+                    if processed_item.lower() in item_query.lower() or item_query.lower() in processed_item.lower():
+                        found_in_db_already = True
+                        break
+                if found_in_db_already:
+                    continue
+
+                taco_data = get_taco_nutrition(item_query) 
+                if taco_data and taco_data['calories'] > 0: 
+                    total_meal_calories += taco_data['calories']
+                    total_meal_carbs += taco_data['carbohydrates']
+                    total_meal_proteins += taco_data['proteins']
+                    total_meal_fats += taco_data['fats']
+                    
+                    foods_for_db.append(taco_data['foods_listed']) 
                     
                     response_lines.append(
-                        f"- {nutrition_data['foods_listed']} (Cal: {nutrition_data['calories']:.0f} | "
-                        f"Carb: {nutrition_data['carbohydrates']:.0f} | Prot: {nutrition_data['proteins']:.0f} | "
-                        f"Gord: {nutrition_data['fats']:.0f})"
+                        f"- {taco_data['foods_listed']} (Cal: {taco_data['calories']:.0f} | "
+                        f"Carb: {taco_data['carbohydrates']:.0f} | Prot: {taco_data['proteins']:.0f} | "
+                        f"Gord: {taco_data['fats']:.0f})"
                     )
+                    processed_alimentos_taco_db.add(taco_data['original_alimento'].lower()) 
                 else:
-                    response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}'.")
+                    is_redundant_query = False
+                    for existing_item in processed_alimentos_taco_db:
+                        if existing_item.lower() in item_query.lower() or item_query.lower() in existing_item.lower():
+                            is_redundant_query = True
+                            break
+                    
+                    if not is_redundant_query:
+                        response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}' na TACO.")
             
-            # Garante que sempre haja algo para o DB, mesmo que nenhum item tenha dado resultado
             db_description = ", ".join(foods_for_db) if foods_for_db else "Itens não processados"
             
-            # Armazena a refeição completa com os totais
             add_food_entry(
                 from_number,
                 db_description, 
@@ -250,10 +305,9 @@ def whatsapp_webhook():
                 total_meal_fats
             )
             
-            # Calcular calorias restantes
             calorie_goal = get_goal(from_number, 'calorie_intake')
-            summary = get_daily_summary(from_number) # Recarrega o summary para o total do dia
-            total_consumed_today = sum(f['calories'] for f in summary['foods']) # f é um Row, acesso por nome
+            summary = get_daily_summary(from_number) 
+            total_consumed_today = sum(f['calories'] for f in summary['foods']) 
 
             final_response = "Refeição registrada:\n" + "\n".join(response_lines)
             final_response += f"\n\nTotal da refeição: {total_meal_calories:.0f} kcal, {total_meal_carbs:.0f}g Carb, {total_meal_proteins:.0f}g Prot, {total_meal_fats:.0f}g Gord."
@@ -269,13 +323,13 @@ def whatsapp_webhook():
             
             msg.body(final_response)
 
-        else: # Se food_items_list e quantities_list estiverem vazias
+        else: 
             msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
 
     elif intent == 'registrar_exercicio':
-        activity_name_list = entities.get('activity_name', []) # Pode ser uma lista
+        activity_name_list = entities.get('activity_name', []) 
         duration_value = entities.get('duration_value')
-        duration_unit_list = entities.get('duration_unit', []) # Pode ser uma lista
+        duration_unit_list = entities.get('duration_unit', []) 
 
         activity_name = activity_name_list[0] if activity_name_list else None
         duration_unit = duration_unit_list[0] if duration_unit_list else None
@@ -311,7 +365,6 @@ def whatsapp_webhook():
             total_food_proteins = 0
             total_food_fats = 0
 
-            # f é um Row: [foods_description, calories, carbohydrates, proteins, fats]
             for f in summary['foods']:
                 food_summary.append(f"- {f['foods_description']} (Cal: {f['calories']:.0f} | Carb: {f['carbohydrates']:.0f} | Prot: {f['proteins']:.0f} | Gord: {f['fats']:.0f})")
                 total_food_calories += f['calories']
@@ -362,49 +415,59 @@ def whatsapp_webhook():
         else:
             msg.body("Você ainda não registrou nenhuma refeição hoje. Use 'comi [alimento]' para registrar.")
 
-    elif intent == 'definir_meta':
-        goal_type_list = entities.get('goal_type', [])
-        target_value = entities.get('target_value')
-        
-        goal_type = goal_type_list[0] if goal_type_list else None 
-        
-        if goal_type and target_value:
-            try:
-                target_value = float(target_value) 
-                set_goal(from_number, goal_type, target_value)
-                msg.body(f"Meta de {goal_type} definida para {target_value} com sucesso!")
-            except ValueError:
-                msg.body("Formato de valor para meta inválido. Por favor, use um número.")
+    # --- NOVO: Lógica para Limpar todas as refeições do dia ---
+    elif intent == 'limpar_refeicoes_dia':
+        deleted_count = delete_all_food_entries_for_day(from_number)
+        if deleted_count > 0:
+            msg.body(f"Todas as {deleted_count} refeições de hoje foram excluídas com sucesso!")
         else:
-            msg.body("Não consegui definir a meta. Use 'Definir meta [tipo] [valor]' (ex: 'Definir meta calorias 2000').")
-
-    elif intent == 'listar_metas': 
-        calorie_goal = get_goal(from_number, 'calorie_intake')
-        weight_goal = get_goal(from_number, 'weight_loss')
-        exercise_goal = get_goal(from_number, 'exercise_frequency')
-
-        response_lines = ["Suas Metas:"]
-        if calorie_goal:
-            response_lines.append(f"- Consumo diário de calorias: {calorie_goal['target_value']:.0f} kcal")
-        if weight_goal:
-            response_lines.append(f"- Peso Alvo: {weight_goal['target_value']:.1f} kg")
-        if exercise_goal:
-            response_lines.append(f"- Frequência de Exercícios: {exercise_goal['target_value']:.0f} vezes por semana")
-
-        if len(response_lines) == 1:
-            response_lines.append("Você ainda não definiu nenhuma meta. Use 'definir meta [tipo] [valor]'.")
-
-        if weight_goal:
-            summary = get_daily_summary(from_number)
-            current_weight = summary['last_weight']
-            if current_weight:
-                if current_weight <= weight_goal['target_value']:
-                    response_lines.append(f"🎉 Parabéns! Você atingiu ou superou sua meta de peso de {weight_goal['target_value']:.1f} kg!")
+            msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
+    
+    # --- NOVO: Lógica para Excluir refeição específica ---
+    elif intent == 'excluir_refeicao_especifica':
+        entry_number_list = entities.get('entry_number', [])
+        
+        if entry_number_list: # Se o usuário já informou o número na mesma frase (ex: "excluir refeição 1")
+            chosen_index = int(entry_number_list[0])
+            
+            # Pega as refeições para mapear o índice ao ID do DB
+            current_meals = get_food_entries_for_day_indexed(from_number)
+            meal_ids_map = { (i+1): meal['id'] for i, meal in enumerate(current_meals) }
+            
+            if meal_ids_map and chosen_index in meal_ids_map:
+                meal_id_to_delete = meal_ids_map[chosen_index]
+                deleted_rows = delete_food_entry_by_id(meal_id_to_delete)
+                
+                if deleted_rows > 0:
+                    msg.body(f"Refeição número {chosen_index} excluída com sucesso!")
                 else:
-                    diff = current_weight - weight_goal['target_value']
-                    response_lines.append(f"Seu peso atual é {current_weight:.1f} kg. Faltam {diff:.1f} kg para sua meta de {weight_goal['target_value']:.1f} kg.")
-
-        msg.body("\n".join(response_lines))
+                    msg.body("Não foi possível excluir a refeição. Tente novamente.")
+            else:
+                msg.body("Número de refeição inválido. Por favor, digite um número que esteja na sua lista de refeições do dia.")
+            
+            # Reseta o estado do usuário (se ele usou "excluir refeição X", o estado não foi setado para aguardar)
+            set_user_state(from_number, 'none') # Garante que o estado seja limpo após a ação
+            
+        else: # Se o usuário disse apenas "excluir refeição", sem número. INICIA O PROCESSO MULTI-TURN
+            meals_today = get_food_entries_for_day_indexed(from_number)
+            
+            if not meals_today:
+                msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
+                # Reseta o estado
+                set_user_state(from_number, 'none')
+            else:
+                response_lines = ["Suas refeições de hoje:"]
+                meal_ids_map = {} # Mapeia índice do usuário para ID do DB
+                for i, meal in enumerate(meals_today):
+                    response_lines.append(f"{i+1}: {meal['foods_description']} ({meal['calories']:.0f} kcal)")
+                    meal_ids_map[i+1] = meal['id'] # Armazena o ID real do DB
+                
+                response_lines.append("\nQual refeição você quer excluir? Por favor, envie APENAS o número (ex: '1').")
+                
+                # Seta o estado do usuário para aguardar o número, e guarda o mapa de IDs
+                set_user_state(from_number, 'awaiting_meal_delete_number', meal_ids_map)
+                
+                msg.body("\n".join(response_lines))
 
     elif intent == 'definir_lembrete':
         reminder_text_list = entities.get('reminder_text', [])
