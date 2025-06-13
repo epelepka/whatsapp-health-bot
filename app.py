@@ -163,11 +163,12 @@ def whatsapp_webhook():
             msg.body("Não consegui encontrar o valor do peso. Por favor, diga seu peso (ex: 'Meu peso é 75.5').")
 
    
+  
     elif intent == 'registrar_refeicao':
         food_items_list = entities.get('food_item', []) 
         quantities_list = entities.get('quantity', []) 
 
-        if food_items_list or quantities_list: # Continua se pelo menos algo foi detectado
+        if food_items_list or quantities_list: 
             total_meal_calories = 0
             total_meal_carbs = 0
             total_meal_proteins = 0
@@ -176,41 +177,47 @@ def whatsapp_webhook():
             
             response_lines = ["Refeição registrada:"] 
             
-            # --- AGORA USA get_taco_nutrition para buscar ---
-            queries_for_taco = [] # VARIÁVEL CORRIGIDA AQUI!
-
-            # Prioriza a informação de 'product' da entidade quantity e também tenta formatos flexíveis
-            food_to_quantity_map = {}
+            queries_for_taco = []
+            
+            # --- NOVA LÓGICA DE MONTAGEM DE QUERIES ---
+            
+            # 1. Priorize o nome do alimento puro (food_item) - MAIS IMPORTANTE PARA TACO
+            # Se 'arroz' for detectado como food_item, tente primeiro "arroz"
+            for food_name in food_items_list:
+                queries_for_taco.append(food_name)
+            
+            # 2. Em seguida, adicione formatos de quantidade que a TACO pode entender,
+            #    mas apenas se o produto da quantity não foi pego como um food_item puro.
+            #    Ou se a query bruta for única e valiosa.
             for q_item in quantities_list:
                 product_name = q_item.get('product')
                 value = q_item.get('value')
                 unit = q_item.get('unit')
+                raw_query = q_item.get('raw')
 
+                # Tentar "VALOR UNIDADE PRODUTO" ou "VALOR UNIDADE de PRODUTO"
                 if value and unit and product_name:
-                    # Constrói uma query combinada que get_taco_nutrition pode processar
-                    # get_taco_nutrition já entende "100g de batata" ou "100 gramas batata"
-                    queries_for_taco.append(f"{value}{unit} de {product_name}") # CORRIGIDO AQUI!
-                    queries_for_taco.append(f"{value} {unit} de {product_name}") # CORRIGIDO AQUI!
-                elif q_item.get('raw'): # Se não tem produto, mas tem o texto bruto da entidade wit/quantity
-                    queries_for_taco.append(q_item['raw']) # CORRIGIDO AQUI!
+                    queries_for_taco.append(f"{value}{unit} {product_name}")     # ex: "100g arroz"
+                    queries_for_taco.append(f"{value} {unit} de {product_name}") # ex: "100 gramas de arroz"
                 
-                if product_name:
-                    food_to_quantity_map[product_name.lower()] = q_item
-            
-            # Adiciona food_items puros que não foram cobertos pelas quantities (ex: "salada", "arroz", "contrafile")
-            # Isso é crucial para itens que podem não ter vindo com quantidade ou que a TACO prefere assim
-            for food_name in food_items_list:
-                if food_name.lower() not in food_to_quantity_map: # Evita adicionar se já coberto por uma quantity
-                    queries_for_taco.append(food_name) # CORRIGIDO AQUI!
+                # Adicionar a query bruta da quantity (ex: "100g de arroz") como fallback se não foi já tratada
+                if raw_query and raw_query.lower() not in [q.lower() for q in queries_for_taco]:
+                     queries_for_taco.append(raw_query)
+
+            # --- Fim da NOVA LÓGICA DE MONTAGEM DE QUERIES ---
             
             # Remove duplicatas e mantém ordem (importante para evitar consultas repetidas)
             final_queries = []
             seen_queries = set()
-            for q in queries_for_taco: # CORRIGIDO AQUI!
+            for q in queries_for_taco:
                 normalized_q = q.lower()
                 if normalized_q not in seen_queries:
                     final_queries.append(q)
                     seen_queries.add(normalized_q)
+            
+            # Uma última ordem para garantir que a consulta mais simples venha primeiro
+            # Ex: "arroz" antes de "100g de arroz"
+            final_queries.sort(key=lambda x: (len(x), ' ' in x, 'de ' in x)) # Ordena por tamanho, depois espaços, depois 'de '
 
             print(f"Consultando TACO com: {final_queries}") # NOVO: log para ver as consultas enviadas
 
@@ -219,13 +226,26 @@ def whatsapp_webhook():
                 return str(resp)
 
 
+            # Loop para consultar cada item e somar os resultados
+            items_found_and_processed = [] # Para evitar processar o mesmo alimento várias vezes se múltiplos queries o encontrarem
+            
             for item_query in final_queries:
+                # Se já processamos um alimento que esta query encontraria, pulamos
+                found_in_db_already = False
+                for processed_item in items_found_and_processed:
+                    if processed_item.lower() in item_query.lower() or item_query.lower() in processed_item.lower():
+                        found_in_db_already = True
+                        break
+                if found_in_db_already:
+                    continue
+
                 taco_data = get_taco_nutrition(item_query) # Chama a função da TACO
                 if taco_data and taco_data['calories'] > 0: 
                     total_meal_calories += taco_data['calories']
                     total_meal_carbs += taco_data['carbohydrates']
                     total_meal_proteins += taco_data['proteins']
                     total_meal_fats += taco_data['fats']
+                    
                     foods_for_db.append(taco_data['foods_listed']) 
                     
                     response_lines.append(
@@ -233,9 +253,18 @@ def whatsapp_webhook():
                         f"Carb: {taco_data['carbohydrates']:.0f} | Prot: {taco_data['proteins']:.0f} | "
                         f"Gord: {taco_data['fats']:.0f})"
                     )
+                    items_found_and_processed.append(taco_data['original_alimento']) # Adiciona o nome original da TACO
                 else:
-                    response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}' na TACO.")
+                    # Só adiciona a mensagem de "não encontrei" se ainda não processamos o alimento principal
+                    is_main_food_query = False
+                    for food_name in food_items_list:
+                        if food_name.lower() in item_query.lower():
+                            is_main_food_query = True
+                            break
+                    if is_main_food_query and item_query.lower() not in [item.lower() for item in items_found_and_processed]:
+                        response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}' na TACO.")
             
+            # Garante que sempre haja algo para o DB, mesmo que nenhum item tenha dado resultado
             db_description = ", ".join(foods_for_db) if foods_for_db else "Itens não processados"
             
             add_food_entry(
@@ -267,7 +296,6 @@ def whatsapp_webhook():
 
         else: 
             msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
-            
 
     elif intent == 'registrar_exercicio':
         activity_name_list = entities.get('activity_name', []) 
