@@ -179,3 +179,5 @@ if __name__ == '__main__':
         print(f"Frango: Cal: {info_frango['calories']:.0f}, Carb: {info_frango['carbohydrates']:.0f}, Prot: {info_frango['proteins']:.0f}, Gord: {info_frango['fats']:.0f}, Desc: {info_frango['foods_listed']}")
     else:
         print("Frango: Não encontrado.")
+
+        
