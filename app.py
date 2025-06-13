@@ -1,4 +1,3 @@
-
 # app.py
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
@@ -224,6 +223,7 @@ def whatsapp_webhook():
                 if value and unit and product_name:
                     queries_for_taco.append(f"{value}{unit} de {product_name}") 
                     queries_for_taco.append(f"{value} {unit} de {product_name}") 
+                    queries_for_taco.append(f"{value}{unit} {product_name}")     
                 elif q_item.get('raw'): 
                     queries_for_taco.append(q_item['raw'])
                 
@@ -243,11 +243,9 @@ def whatsapp_webhook():
                     seen_queries.add(normalized_q)
             
             final_queries.sort(key=lambda x: (
-                x.count(' '),         
-                len(x),               
-                'g' in x.lower() or 'grama' in x.lower(), 
-                'ml' in x.lower() or 'litro' in x.lower()
-            ))
+                1 if x.lower() in [item.lower() for item in unique_food_names_from_entities] else 0, # CORREÇÃO: Usar unique_food_names_from_entities
+                len(x) 
+            ), reverse=True) 
 
             print(f"Consultando TACO com: {final_queries}") 
 
@@ -259,12 +257,12 @@ def whatsapp_webhook():
             
             for item_query in final_queries:
                 found_in_db_already = False
-                for processed_item in items_found_and_processed:
-                    if processed_item.lower() in item_query.lower() or item_query.lower() in processed_item.lower():
+                for processed_item_original_name in items_found_and_processed:
+                    if processed_item_original_name.lower() in item_query.lower() or item_query.lower() in processed_item_original_name.lower():
                         found_in_db_already = True
                         break
                 if found_in_db_already:
-                    continue
+                    continue 
 
                 taco_data = get_taco_nutrition(item_query) 
                 if taco_data and taco_data['calories'] > 0: 
@@ -282,13 +280,13 @@ def whatsapp_webhook():
                     )
                     items_found_and_processed.append(taco_data['original_alimento']) 
                 else:
-                    is_redundant_query = False
-                    for existing_item in items_found_and_processed:
-                        if existing_item.lower() in item_query.lower() or item_query.lower() in existing_item.lower():
-                            is_redundant_query = True
+                    is_redundant_message = False
+                    for existing_item_original_name in items_found_and_processed:
+                        if existing_item_original_name.lower() in item_query.lower() or item_query.lower() in existing_item_original_name.lower():
+                            is_redundant_message = True
                             break
                     
-                    if not is_redundant_query:
+                    if not is_redundant_message:
                         response_lines.append(f"- Não encontrei dados nutricionais para '{item_query}' na TACO.")
             
             db_description = ", ".join(foods_for_db) if foods_for_db else "Itens não processados"
