@@ -1,7 +1,7 @@
 # taco_api.py
 import sqlite3
 import os
-import re # Para processar nomes de alimentos
+import re 
 
 # Define o nome do arquivo do banco de dados (o mesmo que no database.py)
 DATABASE_FILE = 'health_assistant.db'
@@ -25,24 +25,26 @@ def get_taco_nutrition(query):
     quantidade_g = 100.0 # Padrão para 100g se a quantidade não for especificada ou reconhecida
 
     # Tenta extrair quantidade e alimento da query (similar à Nutritionix)
-    match_quantity = re.search(r'(\d+)\s*(g|gramas|ml|litro|xicara|copo)\s*(de)?\s*(.+)', query, re.IGNORECASE)
+    # Ex: "100g de arroz", "2 xicaras de cafe", "300 ml leite"
+    match_quantity = re.search(r'(\d+)\s*(g|gramas|ml|litro|xicara|copo)?\s*(de|do|da|doce|roxa|crua)?\s*(.+)', query, re.IGNORECASE)
     
     if match_quantity:
         value = float(match_quantity.group(1))
-        unit = match_quantity.group(2).lower()
-        alimento_base = match_quantity.group(4).strip()
+        unit = match_quantity.group(2).lower() if match_quantity.group(2) else 'g' # Assume 'g' se unidade não especificada
+        # O último grupo é o nome do alimento. Ignora "de", "do", "da", etc.
+        alimento_base = match_quantity.group(4).strip() 
 
         # Converte para gramas ou ml (para usar na proporção de 100g)
         if unit in ['g', 'gramas']:
             quantidade_g = value
-        elif unit in ['ml', 'litro']: # Assumindo densidade de 1g/ml para líquidos para fins de cálculo
+        elif unit in ['ml', 'litro']: 
             if unit == 'litro': quantidade_g = value * 1000
             else: quantidade_g = value
-        elif unit in ['xicara', 'copo']: # Conversões aproximadas, podem ser melhoradas
-            if unit == 'xicara': quantidade_g = value * 180 # Aprox. 180g para uma xícara de arroz, varia muito
-            else: quantidade_g = value * 200 # Aprox. 200g para um copo de água, varia muito
-        else: # Unidade desconhecida, assume 100g e tenta o alimento base
-            quantidade_g = 100.0 # Usa a quantidade padrão
+        elif unit in ['xicara', 'copo']:
+            if unit == 'xicara': quantidade_g = value * 180 
+            else: quantidade_g = value * 200 
+        else:
+            quantidade_g = 100.0 # Unidade desconhecida, assume 100g.
     else:
         alimento_base = query.strip() # Se não achou quantidade, a query é o alimento
 
@@ -50,20 +52,62 @@ def get_taco_nutrition(query):
         conn.close()
         return None
 
-    # Tenta buscar o alimento na tabela TACO
-    # Usar LIKE para buscas parciais (ex: "arroz" encontra "Arroz, integral, cozido")
-    # Tenta primeiro a busca exata ou a mais próxima
-    search_terms = [
-        alimento_base, # Busca exata
-        f"%{alimento_base}%", # Busca contendo a palavra
-        f"%{alimento_base.replace(' ', '%')}%" # Busca com espaços como curingas
+    # --- NOVA ESTRATÉGIA DE BUSCA NA TACO ---
+    # 1. Tentar busca exata primeiro
+    # 2. Tentar busca com LIKE para variações
+    # 3. Tentar busca com palavras-chave separadas
+
+    found_food = None
+
+    # Normaliza o alimento base para busca
+    alimento_base_normalized = alimento_base.lower().replace(" ", "%") # Ex: "arroz integral" -> "arroz%integral"
+
+    search_queries = [
+        alimento_base.replace(",", "").strip(), # Ex: "Arroz integral cozido"
+        alimento_base.strip(), # Ex: "Arroz, integral, cozido" (com vírgulas)
+        f"%{alimento_base.strip()}%", # "arroz" encontra "Arroz, integral, cozido"
+        f"%{alimento_base_normalized}%" # "arroz%integral"
     ]
     
-    found_food = None
-    for term in search_terms:
-        cursor.execute("SELECT * FROM taco_foods WHERE alimento LIKE ? LIMIT 1", (term,))
+    # Adicionar termos mais genéricos se a consulta for muito específica
+    # Ex: "contrafile" -> "carne"
+    # Ex: "batata, cozida" -> "batata"
+    generic_alimento_base = alimento_base.split(',')[0].strip() # Pega apenas a primeira parte
+    if generic_alimento_base.lower() != alimento_base.lower():
+        search_queries.append(generic_alimento_base)
+        search_queries.append(f"%{generic_alimento_base}%")
+        
+    # Adicionar variações com e sem acento para busca
+    alimento_sem_acento = (
+        alimento_base.lower()
+        .replace('á', 'a').replace('ã', 'a').replace('â', 'a')
+        .replace('é', 'e').replace('ê', 'e')
+        .replace('í', 'i')
+        .replace('ó', 'o').replace('õ', 'o')
+        .replace('ú', 'u')
+        .replace('ç', 'c')
+    )
+    if alimento_sem_acento != alimento_base.lower():
+        search_queries.append(alimento_sem_acento)
+        search_queries.append(f"%{alimento_sem_acento}%")
+
+    # Remove duplicatas e garante que a busca mais específica venha primeiro
+    final_search_terms = []
+    seen_terms = set()
+    for term in search_queries:
+        if term.lower() not in seen_terms:
+            final_search_terms.append(term)
+            seen_terms.add(term.lower())
+    
+    # Ordem de busca: exato > com % > genérico. Prioriza exato primeiro.
+    final_search_terms.sort(key=lambda x: (x.count('%'), -len(x))) # Ordena para que exatos ou menos curingas venham antes
+
+    for term in final_search_terms:
+        # Usar COLLATE NOCASE para busca sem sensibilidade a maiusculas/minusculas
+        cursor.execute("SELECT * FROM taco_foods WHERE alimento LIKE ? COLLATE NOCASE LIMIT 1", (term,)) 
         found_food = cursor.fetchone()
         if found_food:
+            print(f"DEBUG TACO: Encontrado '{found_food['alimento']}' para busca '{term}'.") # Log de depuração
             break
 
     if found_food:
@@ -76,6 +120,7 @@ def get_taco_nutrition(query):
         carbohydrates = found_food['carboidrato_g'] * proportion
 
         # Descrição para o usuário e DB (pega do DB para consistência)
+        # Ex: "100g de Arroz, integral, cozido"
         food_description_for_output = f"{quantidade_g:.0f}g de {found_food['alimento']}" \
                                       if quantidade_g != 100.0 else found_food['alimento']
 
@@ -122,3 +167,15 @@ if __name__ == '__main__':
         print(f"200g Arroz: Cal: {info_arroz_200g['calories']:.0f}, Carb: {info_arroz_200g['carbohydrates']:.0f}, Prot: {info_arroz_200g['proteins']:.0f}, Gord: {info_arroz_200g['fats']:.0f}, Desc: {info_arroz_200g['foods_listed']}")
     else:
         print("200g Arroz: Não encontrado.")
+
+    info_feijao = get_taco_nutrition("100g de feijao preto cozido")
+    if info_feijao:
+        print(f"Feijão: Cal: {info_feijao['calories']:.0f}, Carb: {info_feijao['carbohydrates']:.0f}, Prot: {info_feijao['proteins']:.0f}, Gord: {info_feijao['fats']:.0f}, Desc: {info_feijao['foods_listed']}")
+    else:
+        print("Feijão: Não encontrado.")
+
+    info_frango = get_taco_nutrition("frango")
+    if info_frango:
+        print(f"Frango: Cal: {info_frango['calories']:.0f}, Carb: {info_frango['carbohydrates']:.0f}, Prot: {info_frango['proteins']:.0f}, Gord: {info_frango['fats']:.0f}, Desc: {info_frango['foods_listed']}")
+    else:
+        print("Frango: Não encontrado.")
