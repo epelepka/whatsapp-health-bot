@@ -1,24 +1,3 @@
-Entendido! Você me enviou o log de erro do Railway, e ele é muito claro:
-
-NameError: name 'load_dotenv' is not defined
-E a linha onde o erro ocorre é:
-
-Python
-
-File "/app/app.py", line 34, in <module>
-    load_dotenv() # Carrega as variáveis de ambiente do arquivo .env
-O Problema: load_dotenv Não Foi Importado no app.py
-Este NameError significa que a função load_dotenv() está sendo chamada no seu app.py, mas ela não foi importada de sua biblioteca (python-dotenv). O Python não sabe o que load_dotenv significa.
-
-Isso é uma falha de importação que deve ter acontecido durante alguma das atualizações do app.py, onde a linha de importação pode ter sido removida ou não incluída.
-
-A Solução: Adicionar a Importação de load_dotenv no app.py
-Precisamos adicionar from dotenv import load_dotenv no início do seu app.py.
-
-Correção no app.py (Importação load_dotenv)
-Vou te dar o app.py completo com esta correção e todas as últimas atualizações.
-
-Python
 
 # app.py
 from flask import Flask, request
