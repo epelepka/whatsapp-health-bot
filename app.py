@@ -162,11 +162,12 @@ def whatsapp_webhook():
         else:
             msg.body("Não consegui encontrar o valor do peso. Por favor, diga seu peso (ex: 'Meu peso é 75.5').")
 
+   
     elif intent == 'registrar_refeicao':
         food_items_list = entities.get('food_item', []) 
         quantities_list = entities.get('quantity', []) 
 
-        if food_items_list or quantities_list: 
+        if food_items_list or quantities_list: # Continua se pelo menos algo foi detectado
             total_meal_calories = 0
             total_meal_carbs = 0
             total_meal_proteins = 0
@@ -176,8 +177,8 @@ def whatsapp_webhook():
             response_lines = ["Refeição registrada:"] 
             
             # --- AGORA USA get_taco_nutrition para buscar ---
-            final_queries = []
-            
+            queries_for_taco = [] # VARIÁVEL CORRIGIDA AQUI!
+
             # Prioriza a informação de 'product' da entidade quantity e também tenta formatos flexíveis
             food_to_quantity_map = {}
             for q_item in quantities_list:
@@ -188,38 +189,38 @@ def whatsapp_webhook():
                 if value and unit and product_name:
                     # Constrói uma query combinada que get_taco_nutrition pode processar
                     # get_taco_nutrition já entende "100g de batata" ou "100 gramas batata"
-                    queries_for_nutritionix.append(f"{value}{unit} de {product_name}") # Ex: "100g de batata"
-                    queries_for_nutritionix.append(f"{value} {unit} de {product_name}") # Ex: "100 gramas de batata"
-                elif q_item.get('raw'):
-                    queries_for_nutritionix.append(q_item['raw']) # A string bruta da entidade wit/quantity
+                    queries_for_taco.append(f"{value}{unit} de {product_name}") # CORRIGIDO AQUI!
+                    queries_for_taco.append(f"{value} {unit} de {product_name}") # CORRIGIDO AQUI!
+                elif q_item.get('raw'): # Se não tem produto, mas tem o texto bruto da entidade wit/quantity
+                    queries_for_taco.append(q_item['raw']) # CORRIGIDO AQUI!
                 
                 if product_name:
                     food_to_quantity_map[product_name.lower()] = q_item
             
-            # Adiciona food_items puros que não foram cobertos pelas quantities
+            # Adiciona food_items puros que não foram cobertos pelas quantities (ex: "salada", "arroz", "contrafile")
+            # Isso é crucial para itens que podem não ter vindo com quantidade ou que a TACO prefere assim
             for food_name in food_items_list:
-                if food_name.lower() not in food_to_quantity_map:
-                    queries_for_nutritionix.append(food_name)
+                if food_name.lower() not in food_to_quantity_map: # Evita adicionar se já coberto por uma quantity
+                    queries_for_taco.append(food_name) # CORRIGIDO AQUI!
             
-            # Remove duplicatas e mantém ordem
+            # Remove duplicatas e mantém ordem (importante para evitar consultas repetidas)
             final_queries = []
             seen_queries = set()
-            for q in queries_for_nutritionix:
+            for q in queries_for_taco: # CORRIGIDO AQUI!
                 normalized_q = q.lower()
                 if normalized_q not in seen_queries:
                     final_queries.append(q)
                     seen_queries.add(normalized_q)
 
+            print(f"Consultando TACO com: {final_queries}") # NOVO: log para ver as consultas enviadas
 
-            print(f"Consultando TACO com: {final_queries}") 
-
-            if not final_queries:
+            if not final_queries: # Se após toda a lógica, não há itens para consultar
                 msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
                 return str(resp)
 
 
             for item_query in final_queries:
-                taco_data = get_taco_nutrition(item_query) # NOVO: Chama a função da TACO
+                taco_data = get_taco_nutrition(item_query) # Chama a função da TACO
                 if taco_data and taco_data['calories'] > 0: 
                     total_meal_calories += taco_data['calories']
                     total_meal_carbs += taco_data['carbohydrates']
@@ -266,6 +267,7 @@ def whatsapp_webhook():
 
         else: 
             msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
+            
 
     elif intent == 'registrar_exercicio':
         activity_name_list = entities.get('activity_name', []) 
