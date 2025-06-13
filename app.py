@@ -1,21 +1,3 @@
-Você está absolutamente certo! Essa linha de log que você me enviou:
-
-File "/app/app.py", line 1169
-    [2025-06-13 21:54:16,563] ERROR in app: Exception on /webhook [POST]
-          ^
-É um erro de sintaxe (SyntaxError) ou de indentação (IndentationError) no seu arquivo app.py. A ^ aponta para onde o Python encontrou algo inesperado.
-
-O problema é que o trecho [2025-06-13 21:54:16,563] ERROR in app: Exception on /webhook [POST] (que era um log do Railway) foi copiado acidentalmente para dentro do seu código app.py e o Python está tentando interpretá-lo como parte do código, o que causa um erro.
-
-Isso acontece facilmente ao copiar e colar blocos de código grandes.
-
-A Solução: Remover Texto Indevido e Garantir a Indentação
-Você precisa abrir seu app.py e remover esse texto de log que foi colado por engano. Além disso, vamos garantir que a indentação de todo o arquivo esteja perfeita.
-
-Vou te dar o app.py COMPLETO e CORRIGIDO, com a garantia de que a sintaxe e a indentação estão perfeitas. Por favor, copie e cole TODO o código abaixo, substituindo o conteúdo atual do seu app.py.
-
-app.py Completo e CORRIGIDO (Final e Pronto!)
-Python
 
 # app.py
 from flask import Flask, request
