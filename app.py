@@ -10,6 +10,7 @@ import json
 from flask import request, abort
 from twilio.request_validator import RequestValidator
 import os
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 print("1. Imports carregados.") 
 
