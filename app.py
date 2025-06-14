@@ -141,6 +141,8 @@ def _get_base_food_name_from_query_string(query_str):
         return match.group(1).strip().split(',')[0].strip().lower()
     return query_str.strip().lower() # Retorna a query original em minúsculas como fallback
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 @app.route("/webhook", methods=['POST'])
 def webhook():
 
