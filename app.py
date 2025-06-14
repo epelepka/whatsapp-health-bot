@@ -84,7 +84,6 @@ def webhook():
             if best_guess:
                 add_food_entry(from_number, best_guess['foods_listed'], best_guess['calories'], best_guess['carbohydrates'], best_guess['proteins'], best_guess['fats'])
                 
-                # --- NOVA RESPOSTA CONCISA ---
                 total_consumed_today = sum(f['calories'] for f in get_daily_summary(from_number)['foods'])
                 response_text = f"✅ Salvo! ({best_guess['original_alimento']})\n\nTotal de hoje: {total_consumed_today:.0f} kcal."
                 calorie_goal = get_goal(from_number, 'calorie_intake')
@@ -92,7 +91,6 @@ def webhook():
                     remaining = calorie_goal['target_value'] - total_consumed_today
                     response_text += f"\nMeta: {remaining:.0f} kcal restantes."
                 msg.body(response_text)
-                # -----------------------------
             else:
                 msg.body("🤔 Ocorreu um erro, tente de novo.")
             set_user_state(from_number, 'none')
@@ -130,7 +128,6 @@ def webhook():
             chosen_food = alternatives_map[answer]
             add_food_entry(from_number, chosen_food['foods_listed'], chosen_food['calories'], chosen_food['carbohydrates'], chosen_food['proteins'], chosen_food['fats'])
             
-            # --- NOVA RESPOSTA CONCISA ---
             total_consumed_today = sum(f['calories'] for f in get_daily_summary(from_number)['foods'])
             response_text = f"✅ Salvo! ({chosen_food['original_alimento']})\n\nTotal de hoje: {total_consumed_today:.0f} kcal."
             calorie_goal = get_goal(from_number, 'calorie_intake')
@@ -138,7 +135,6 @@ def webhook():
                 remaining = calorie_goal['target_value'] - total_consumed_today
                 response_text += f"\nMeta: {remaining:.0f} kcal restantes."
             msg.body(response_text)
-            # -----------------------------
             
             set_user_state(from_number, 'none')
         else:
@@ -154,25 +150,23 @@ def webhook():
         food_items_list = entities.get('food_item', []) 
         if not food_items_list:
             msg.body("Não consegui identificar o que você comeu...")
-            return str(resp)
-        
-        food_query = food_items_list[0]
-        food_options = search_taco_options(food_query)
-        
-        if not food_options:
-            msg.body(f"Não encontrei dados para '{food_query}'.")
-            return str(resp)
-
-        best_guess = food_options[0]
-        alternatives = food_options[1:]
-        meal_context = {"best_guess": best_guess, "alternatives": alternatives}
-        
-        msg.body(f"Encontrei: {best_guess['original_alimento']}. Está correto? (sim/não)")
-        set_user_state(from_number, 'awaiting_meal_confirmation', context_data=meal_context)
+        else:
+            food_query = food_items_list[0]
+            food_options = search_taco_options(food_query)
+            
+            if not food_options:
+                msg.body(f"Não encontrei dados para '{food_query}'.")
+            else:
+                best_guess = food_options[0]
+                alternatives = food_options[1:]
+                meal_context = {"best_guess": best_guess, "alternatives": alternatives}
+                
+                msg.body(f"Encontrei: {best_guess['original_alimento']}. Está correto? (sim/não)")
+                set_user_state(from_number, 'awaiting_meal_confirmation', context_data=meal_context)
+        return str(resp) # <-- MUDANÇA: Retorna imediatamente
 
     elif intent == 'definir_meta':
-        # Exemplo de como tratar a meta de forma síncrona
-        goal_type = 'calorie_intake' # Simplificação
+        goal_type = 'calorie_intake'
         goal_value = entities.get('goal_value')
         if goal_value:
              try:
@@ -182,14 +176,18 @@ def webhook():
                 msg.body("Valor inválido para a meta.")
         else:
             msg.body("Não entendi o valor da meta. Diga, por exemplo, 'Definir meta 2000'.")
+        return str(resp) # <-- MUDANÇA: Retorna imediatamente
             
-    # ... (O restante de suas intenções: 'registrar_peso', 'obter_resumo_diario', etc.) ...
+    # ... (ADICIONE OS RETURNS PARA TODAS AS SUAS OUTRAS INTENÇÕES AQUI) ...
+    # Exemplo:
+    elif intent == 'registrar_peso':
+        # ... sua lógica para registrar peso ...
+        msg.body("Peso registrado!") # Exemplo
+        return str(resp)
 
-    else:
-        msg.body("Desculpe, não entendi o que você quis dizer.")
-
+    # Fallback final se nenhuma intenção for correspondida
+    msg.body("Desculpe, não entendi o que você quis dizer.")
     return str(resp)
 
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-
