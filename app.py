@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 import re
 from datetime import datetime, date
 import atexit
+from werkzeug.middleware.proxy_fix import ProxyFix
+from twilio.request_validator import RequestValidator
 
 print("1. Imports carregados.")
 
@@ -27,6 +29,10 @@ print("2. Funções de suporte importadas.")
 load_dotenv() 
 
 app = Flask(__name__)
+
+# CORREÇÃO: Adiciona o ProxyFix para evitar erros 403 no Railway
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
 
 # Configurações da Twilio
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
