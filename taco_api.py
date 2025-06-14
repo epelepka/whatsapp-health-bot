@@ -1,17 +1,3 @@
-import psycopg2
-from psycopg2 import sql
-import os
-import re 
-
-# URL de conexão com o PostgreSQL (irá do .env ou do ambiente)
-DATABASE_URL = os.getenv('DATABASE_URL')
-
-def get_db_connection():
-    """Retorna uma conexão com o banco de dados PostgreSQL."""
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL não está configurada! Não é possível conectar ao PostgreSQL.")
-    return psycopg2.connect(DATABASE_URL + "?sslmode=require") # Adicionado sslmode=require
-
 def get_taco_nutrition(query):
     """
     Busca informações nutricionais de um alimento na tabela TACO (PostgreSQL).
@@ -21,14 +7,14 @@ def get_taco_nutrition(query):
     cursor = conn.cursor()
 
     alimento_base = None
-    quantidade_g = 100.0 
+    quantidade_g = 100.0
 
     match_quantity = re.search(r'(\d+)\s*(g|gramas|ml|litro|xicara|copo)?\s*(de|do|da|dos|das)?\s*(.+)', query, re.IGNORECASE)
-    
+
     if match_quantity:
         value = float(match_quantity.group(1))
         unit = match_quantity.group(2).lower() if match_quantity.group(2) else 'g'
-        alimento_base = match_quantity.group(4).strip() 
+        alimento_base = match_quantity.group(4).strip()
 
         if unit in ['g', 'gramas']:
             quantidade_g = value
@@ -36,12 +22,12 @@ def get_taco_nutrition(query):
             if unit == 'litro': quantidade_g = value * 1000
             else: quantidade_g = value
         elif unit in ['xicara', 'copo']:
-            if unit == 'xicara': quantidade_g = value * 180 
-            else: quantidade_g = value * 200 
+            if unit == 'xicara': quantidade_g = value * 180
+            else: quantidade_g = value * 200
         else:
-            quantidade_g = 100.0 
+            quantidade_g = 100.0
     else:
-        alimento_base = query.strip() 
+        alimento_base = query.strip()
 
     if not alimento_base:
         cursor.close()
@@ -63,17 +49,17 @@ def get_taco_nutrition(query):
         return s
 
     alimento_base_normalized = normalize_string(alimento_base)
-    
+
     search_queries = [
-        alimento_base.replace(",", "").strip(), 
-        alimento_base.strip(), 
-        normalize_string(alimento_base).replace(",", "").strip(), 
-        f"%{alimento_base}%", 
-        f"%{alimento_base.replace(' ', '%')}%", 
-        f"%{alimento_base_normalized}%", 
-        f"%{alimento_base_normalized.replace(' ', '%')}%" 
+        alimento_base.replace(",", "").strip(),
+        alimento_base.strip(),
+        normalize_string(alimento_base).replace(",", "").strip(),
+        f"%{alimento_base}%",
+        f"%{alimento_base.replace(' ', '%')}%",
+        f"%{alimento_base_normalized}%",
+        f"%{alimento_base_normalized.replace(' ', '%')}%"
     ]
-    
+
     generic_alimento_base = alimento_base.split(',')[0].strip()
     if generic_alimento_base.lower() != alimento_base.lower() and generic_alimento_base not in search_queries:
         search_queries.append(generic_alimento_base)
@@ -88,20 +74,29 @@ def get_taco_nutrition(query):
         if normalized_term_for_set not in seen_terms and term.strip():
             final_search_terms.append(term.strip())
             seen_terms.add(normalized_term_for_set)
-    
+
     final_search_terms.sort(key=lambda x: (
-        x.count('%'), 
-        -len(x)       
+        x.count('%'),
+        -len(x)
     ))
 
+    # --- ESTE É O LOCAL CORRETO PARA A CONSULTA E O DEBUG ---
     for term in final_search_terms:
-        cursor.execute("SELECT * FROM taco_foods WHERE alimento ILIKE %s LIMIT 1", (term,)) 
-        row = cursor.fetchone() 
-        if row:
-            desc = cursor.description
-            found_food = {col[0]: row[idx] for idx, col in enumerate(desc)} 
-            print(f"DEBUG TACO: Encontrado '{found_food['alimento']}' para busca '{term}'.")
-            break
+        try:
+            cursor.execute("SELECT * FROM taco_foods WHERE alimento ILIKE %s LIMIT 1", (term,))
+            row = cursor.fetchone()
+            
+            # NOSSO PRINT DE DEPURAÇÃO, NO LUGAR CERTO:
+            print(f"DEBUG: Buscando por '{term}', Resultado do DB: {row}")
+
+            if row:
+                desc = cursor.description
+                found_food = {col[0]: row[idx] for idx, col in enumerate(desc)}
+                print(f"DEBUG TACO: Encontrado '{found_food['alimento']}' para busca '{term}'.")
+                break # Sai do loop assim que encontrar o primeiro resultado
+        except Exception as e:
+            print(f"ERRO durante a consulta com o termo '{term}': {e}")
+
 
     if found_food:
         proportion = quantidade_g / 100.0
@@ -114,7 +109,6 @@ def get_taco_nutrition(query):
         food_description_for_output = f"{quantidade_g:.0f}g de {found_food['alimento']}" \
                                       if quantidade_g != 100.0 else found_food['alimento']
 
-
         cursor.close()
         conn.close()
         return {
@@ -123,7 +117,7 @@ def get_taco_nutrition(query):
             'proteins': proteins,
             'fats': fats,
             'foods_listed': food_description_for_output,
-            'original_alimento': found_food['alimento'] 
+            'original_alimento': found_food['alimento']
         }
     else:
         cursor.close()
