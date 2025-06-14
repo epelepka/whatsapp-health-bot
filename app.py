@@ -34,6 +34,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Isso "ensina" o Flask a olhar os cabeçalhos do proxy (X-Forwarded-For e X-Forwarded-Proto)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
 print("3. Flask app criado.") 
 
 # Configurações da Twilio (do .env)
@@ -150,6 +153,7 @@ def webhook():
     print("--- Nova Requisição Recebida ---")
     
     auth_token_from_env = os.environ.get('TWILIO_AUTH_TOKEN')
+
     print(f"1. Token do Ambiente: {'Encontrado' if auth_token_from_env else 'NÃO ENCONTRADO'}") # Apenas confirma se o token foi lido
 
     url_recebida = request.url
