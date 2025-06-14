@@ -10,7 +10,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 def get_db_connection():
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL não está configurada! Não é possível conectar ao PostgreSQL.")
-    return psycopg2.connect(DATABASE_URL + "?sslmode=require")
+    return psycopg2.connect(DATABASE_URL + "?sslmode=require") 
 
 def init_db():
     conn = get_db_connection()
@@ -366,3 +366,40 @@ def delete_food_entry_by_id(entry_id):
     cursor.close()
     conn.close()
     return rows_deleted
+
+# --- NOVAS FUNÇÕES PARA GERENCIAMENTO DE ESTADO ---
+
+def set_user_state(whatsapp_number, state, context_data=None):
+    user_id = get_or_create_user(whatsapp_number)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    context_json = json.dumps(context_data) if context_data else None
+
+    cursor.execute(
+        "INSERT INTO user_state (user_id, state, context_data) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET state = EXCLUDED.state, context_data = EXCLUDED.context_data",
+        (user_id, state, context_json)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    print(f"DEBUG DB: Estado para {whatsapp_number} setado para '{state}' com contexto: {context_data}")
+
+def get_user_state(whatsapp_number):
+    user_id = get_or_create_user(whatsapp_number)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT state, context_data FROM user_state WHERE user_id = %s",
+        (user_id,)
+    )
+    result = _fetch_one_as_dict(cursor)
+    cursor.close()
+    conn.close()
+    
+    if result:
+        context_data = json.loads(result['context_data']) if result['context_data'] else {}
+        print(f"DEBUG DB: Estado para {whatsapp_number} obtido: '{result['state']}' com contexto: {context_data}")
+        return {'state': result['state'], 'context_data': context_data}
+    print(f"DEBUG DB: Nenhum estado encontrado para {whatsapp_number}.")
+    return {'state': 'none', 'context_data': {}} 
