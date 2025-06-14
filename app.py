@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask, request
+from flask import Flask, request, abort
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 import os
@@ -7,35 +7,33 @@ from dotenv import load_dotenv
 import re
 from datetime import datetime, date, time
 import json 
-from flask import request, abort
 from twilio.request_validator import RequestValidator
-import os
 from werkzeug.middleware.proxy_fix import ProxyFix
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import atexit 
 
 print("1. Imports carregados.") 
 
-# Importa as funções que criaremos
-from database import init_db, get_or_create_user, add_food_entry, add_weight_entry, add_exercise_entry, get_daily_summary, \
-                     set_goal, get_goal, add_reminder, get_active_reminders, get_user_reminders, deactivate_reminder, \
-                     update_last_interaction_date, get_last_interaction_date, get_all_users, \
-                     delete_all_food_entries_for_day, get_food_entries_for_day_indexed, delete_food_entry_by_id, \
-                     set_user_state, get_user_state 
+# Importa as funções dos outros arquivos
+from database import (init_db, get_or_create_user, add_food_entry, add_weight_entry, 
+                      add_exercise_entry, get_daily_summary, set_goal, get_goal, 
+                      add_reminder, get_active_reminders, get_user_reminders, 
+                      deactivate_reminder, update_last_interaction_date, 
+                      get_last_interaction_date, get_all_users, delete_all_food_entries_for_day, 
+                      get_food_entries_for_day_indexed, delete_food_entry_by_id, 
+                      set_user_state, get_user_state)
 from activity_api import calculate_calories_burned
 from wit_nlp import get_wit_ai_response, parse_wit_ai_response 
 from taco_api import get_taco_nutrition 
 
 print("2. Funções do banco de dados e APIs importadas.") 
 
-# Para agendamento de tarefas
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-import atexit 
-
 load_dotenv() 
 
 app = Flask(__name__)
 
-# Isso "ensina" o Flask a olhar os cabeçalhos do proxy (X-Forwarded-For e X-Forwarded-Proto)
+# Ensina o Flask a olhar os cabeçalhos do proxy (corrige o erro 403)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 print("3. Flask app criado.") 
@@ -45,185 +43,160 @@ TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER') 
 
-# Cliente Twilio para enviar mensagens proativas (para os lembretes e bom dia)
+# Cliente Twilio para enviar mensagens proativas
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Inicializa o banco de dados ao iniciar o aplicativo
+# Inicializa o banco de dados
 with app.app_context():
     init_db()
     print("4. Banco de dados inicializado.") 
 
-# --- Funções do Agendador de Lembretes ---
+# --- Funções do Agendador (CORRIGIDAS) ---
+
+def _get_job_id(whatsapp_number, reminder_text, reminder_time_str):
+    """Cria um ID de job único e previsível."""
+    hour, minute = map(int, reminder_time_str.split(':'))
+    # Remove caracteres inválidos para o ID
+    safe_text = re.sub(r'\W+', '', reminder_text.replace(' ', '_'))
+    return f"reminder_{whatsapp_number}_{hour:02d}{minute:02d}_{safe_text[:20]}"
+
 def send_reminder_message(whatsapp_number, reminder_text):
-    """Envia uma mensagem de lembrete para o número de WhatsApp."""
-    try:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=whatsapp_number,
-            body=f"🔔 Lembrete: {reminder_text}"
-        )
-        print(f"Lembrete enviado para {whatsapp_number}: {reminder_text}")
-    except Exception as e:
-        print(f"Erro ao enviar lembrete para {whatsapp_number}: {e}")
+    """Envia uma mensagem de lembrete (com contexto do app)."""
+    with app.app_context():
+        try:
+            twilio_client.messages.create(
+                from_=TWILIO_WHATSAPP_NUMBER,
+                to=whatsapp_number,
+                body=f"🔔 Lembrete: {reminder_text}"
+            )
+            print(f"Lembrete enviado para {whatsapp_number}: {reminder_text}")
+        except Exception as e:
+            print(f"Erro ao enviar lembrete para {whatsapp_number}: {e}")
 
 def schedule_all_reminders():
-    """Agenda todos os lembretes ativos do banco de dados."""
-    reminders = get_active_reminders()
-    print(f"Agendando {len(reminders)} lembretes...")
-    for r in reminders:
-        reminder_text = r['reminder_text']
-        reminder_time_str = r['reminder_time']
-        whatsapp_number = r['whatsapp_number']
-
-        try:
-            hour, minute = map(int, reminder_time_str.split(':'))
-            job_id = f"reminder_{whatsapp_number}_{hour:02d}{minute:02d}_{reminder_text.replace(' ', '_')[:10]}"
-            scheduler.add_job(
-                send_reminder_message,
-                CronTrigger(hour=hour, minute=minute),
-                args=[whatsapp_number, reminder_text],
-                id=job_id,
-                replace_existing=True
-            )
-            print(f"Agendado: {reminder_text} para {whatsapp_number} às {reminder_time_str}")
-        except Exception as e:
-            print(f"Erro ao agendar lembrete '{reminder_text}' para {whatsapp_number} às {reminder_time_str}: {e}")
-
-# --- Função para a Mensagem de Bom Dia ---
-def send_good_morning_message():
-    """Envia uma mensagem de bom dia para todos os usuários que não interagiram hoje."""
-    print("Verificando usuários para enviar mensagem de bom dia...")
-    all_users = get_all_users()
-    today = date.today()
-
-    for user_number in all_users:
-        last_interaction = get_last_interaction_date(user_number)
-        
-        if last_interaction is None or last_interaction < today:
+    """Agenda todos os lembretes ativos do banco de dados (com contexto do app)."""
+    with app.app_context():
+        reminders = get_active_reminders()
+        print(f"Agendando {len(reminders)} lembretes...")
+        for r in reminders:
+            reminder_text, reminder_time_str, whatsapp_number = r['reminder_text'], r['reminder_time'], r['whatsapp_number']
             try:
-                twilio_client.messages.create(
-                    from_=TWILIO_WHATSAPP_NUMBER,
-                    to=user_number,
-                    body="☀️ Bom dia! Pronto para o dia? Me diga como posso te ajudar hoje."
+                hour, minute = map(int, reminder_time_str.split(':'))
+                job_id = _get_job_id(whatsapp_number, reminder_text, reminder_time_str)
+                scheduler.add_job(
+                    send_reminder_message,
+                    CronTrigger(hour=hour, minute=minute),
+                    args=[whatsapp_number, reminder_text],
+                    id=job_id,
+                    replace_existing=True
                 )
-                print(f"Mensagem de bom dia enviada para {user_number}.")
+                print(f"Agendado: {reminder_text} para {whatsapp_number} às {reminder_time_str}")
             except Exception as e:
-                print(f"Erro ao enviar bom dia para {user_number}: {e}")
-        else:
-            print(f"Usuário {user_number} já interagiu hoje. Não enviando bom dia.")
+                print(f"Erro ao agendar lembrete '{reminder_text}': {e}")
+
+def send_good_morning_message():
+    """Envia uma mensagem de bom dia (com contexto do app)."""
+    with app.app_context():
+        print("Verificando usuários para enviar mensagem de bom dia...")
+        all_users = get_all_users()
+        today = date.today()
+        for user_number in all_users:
+            last_interaction = get_last_interaction_date(user_number)
+            if last_interaction is None or last_interaction < today:
+                try:
+                    twilio_client.messages.create(
+                        from_=TWILIO_WHATSAPP_NUMBER,
+                        to=user_number,
+                        body="☀️ Bom dia! Pronto para o dia? Me diga como posso te ajudar hoje."
+                    )
+                    print(f"Mensagem de bom dia enviada para {user_number}.")
+                except Exception as e:
+                    print(f"Erro ao enviar bom dia para {user_number}: {e}")
 
 # Inicializa e inicia o agendador
-scheduler = BackgroundScheduler()
+scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
 scheduler.start()
 print("5. Agendador iniciado.") 
 
-# Adiciona o job diário de "Bom dia" às 8:00
-scheduler.add_job(
-    send_good_morning_message,
-    CronTrigger(hour=8, minute=0), # Todos os dias às 08:00
-    id='daily_good_morning',
-    replace_existing=True
-)
+scheduler.add_job(send_good_morning_message, CronTrigger(hour=8, minute=0), id='daily_good_morning', replace_existing=True)
 print("Job de bom dia diário agendado para 08:00.")
 
-
-# Garante que o agendador é desligado quando o Flask app encerra
 atexit.register(lambda: scheduler.shutdown())
 
-# Agenda os lembretes existentes ao iniciar o app
-with app.app_context():
-    schedule_all_reminders()
-
-# --- FUNÇÃO AUXILIAR PARA EXTRAIR NOME BASE DE UMA QUERY ---
-# Usada para filtrar mensagens redundantes de "Não encontrei"
-def _get_base_food_name_from_query_string(query_str):
-    # Tenta pegar a parte do alimento de uma string de query como "100g de arroz"
-    # ou "arroz, integral, cozido" -> "arroz"
-    match = re.search(r'(?:^|\d+\s*(?:g|gramas|ml|litro|xicara|copo)?\s*(?:de|do|da|dos|das)?\s*)([\w\s,]+)$', query_str, re.IGNORECASE)
-    if match:
-        # Pega o último grupo capturado (o nome do alimento), remove vírgulas, tira espaços e pega a primeira parte se for composto
-        return match.group(1).strip().split(',')[0].strip().lower()
-    return query_str.strip().lower() # Retorna a query original em minúsculas como fallback
-
-from werkzeug.middleware.proxy_fix import ProxyFix
+schedule_all_reminders()
 
 @app.route("/webhook", methods=['POST'])
 def webhook():
-
-     # --- INÍCIO DO CÓDIGO DE DEPURACÃO ---
-    print("--- Nova Requisição Recebida ---")
-    
-    auth_token_from_env = os.environ.get('TWILIO_AUTH_TOKEN')
-
-    print(f"1. Token do Ambiente: {'Encontrado' if auth_token_from_env else 'NÃO ENCONTRADO'}") # Apenas confirma se o token foi lido
-
-    url_recebida = request.url
-    print(f"2. URL para Validação: {url_recebida}")
-
-    post_vars_recebidos = request.form.to_dict()
-    print(f"3. Parâmetros POST: {post_vars_recebidos}")
-
-    twilio_signature_header = request.headers.get('X-Twilio-Signature', '')
-    print(f"4. Assinatura Recebida: {twilio_signature_header}")
-    print("--- Fim dos Dados de Depuração ---")
-    # --- FIM DO CÓDIGO DE DEPURACÃO ---
-
-    # O código de validação continua o mesmo
-    validator = RequestValidator(auth_token_from_env)
-    
-    if not validator.validate(url_recebida, post_vars_recebidos, twilio_signature_header):
-        print("!!! VALIDAÇÃO FALHOU !!!") # Adiciona um log claro de falha
+    # --- Validação da Requisição da Twilio (CORRIGIDO) ---
+    validator = RequestValidator(os.environ.get('TWILIO_AUTH_TOKEN'))
+    if not validator.validate(request.url, request.form.to_dict(), request.headers.get('X-Twilio-Signature', '')):
+        print("!!! VALIDAÇÃO FALHOU !!!")
         return abort(403)
     
-    # Valida se a requisição veio mesmo do Twilio
-    validator = RequestValidator(os.environ.get('TWILIO_AUTH_TOKEN'))
-    
-    # Pega a URL completa e os parâmetros da requisição
-    url = request.url
-    post_vars = request.form.to_dict()
-    
-    # Pega a assinatura do cabeçalho
-    twilio_signature = request.headers.get('X-Twilio-Signature', '')
-
-    if not validator.validate(url, post_vars, twilio_signature):
-        return abort(403) # Requisição inválida, encerra.
-
-    # Se a validação passar, o código continua normalmente
-    msg_body = request.form.get('Body', '').strip()
-   
-
-    incoming_msg = request.values.get('Body', '') 
+    # --- Processamento da Mensagem (CORRIGIDO) ---
+    incoming_msg = request.values.get('Body', '').strip() 
     from_number = request.values.get('From', '') 
-    user_phone_number = request.form.get('From')
-    msg_body = request.form.get('Body', '').strip()
-    user_id = get_or_create_user(from_number) # Obtém o ID do usuário para o estado
+    
+    print(f"Mensagem recebida de {from_number}: {incoming_msg}")
 
+    update_last_interaction_date(from_number)
+    user_state = get_user_state(from_number)
+    
     resp = MessagingResponse()
     msg = resp.message()
 
-    print(f"Mensagem recebida de {from_number}: {incoming_msg}")
+      resp = MessagingResponse()
+    msg = resp.message()
 
-    with app.app_context():
-        update_last_interaction_date(from_number)
+    # --- NOVO TRATADOR DE ESTADO PARA CONFIRMAÇÃO DE REFEIÇÃO ---
+    if current_state == 'awaiting_meal_confirmation':
+        answer = incoming_msg.lower().strip()
+        meal_context = context_data
 
-    user_state = get_user_state(from_number)
-    current_state = user_state['state']
-    context_data = user_state['context_data']
+        if answer in ['sim', 's', 'ok', 'correto', 'isso']:
+            # Usuário confirmou, agora salvamos no banco
+            if meal_context:
+                add_food_entry(
+                    from_number,
+                    meal_context['db_description'],
+                    meal_context['calories'],
+                    meal_context['carbohydrates'],
+                    meal_context['proteins'],
+                    meal_context['fats']
+                )
+                msg.body("✅ Ótimo! Refeição registrada no seu diário.")
+            else:
+                msg.body("🤔 Ocorreu um erro, não consegui encontrar os dados da refeição para salvar. Por favor, tente registrar novamente.")
+            
+            set_user_state(from_number, 'none') # Limpa o estado
 
+        elif answer in ['não', 'nao', 'n', 'errado', 'cancelar']:
+            # Usuário cancelou
+            msg.body("❌ Ok, refeição cancelada. O que você gostaria de registrar então?")
+            set_user_state(from_number, 'none') # Limpa o estado
+        
+        else:
+            # Resposta não reconhecida, pede para tentar de novo
+            msg.body("Não entendi. Por favor, responda com 'sim' para confirmar ou 'não' para cancelar a refeição.")
+            # Mantém o estado para a próxima tentativa
+        
+        return str(resp) # Envia a resposta e termina a execução aqui
+
+    # O resto do seu código continua a partir daqui...
     if current_state == 'awaiting_meal_delete_number':
+        # ...
+
+    # --- Lógica de Máquina de Estados (ex: para exclusão de refeição) ---
+    if user_state['state'] == 'awaiting_meal_delete_number':
         parsed_data = parse_wit_ai_response(incoming_msg) 
         entry_number_list = parsed_data['entities'].get('entry_number', [])
         
         if entry_number_list:
             chosen_index = int(entry_number_list[0]) 
-            
-            meal_ids_map = context_data.get('meal_ids_map') 
+            meal_ids_map = user_state['context_data'].get('meal_ids_map') 
             
             if meal_ids_map and chosen_index in meal_ids_map:
-                meal_id_to_delete = meal_ids_map[chosen_index]
-                deleted_rows = delete_food_entry_by_id(meal_id_to_delete)
-                
-                if deleted_rows > 0:
+                if delete_food_entry_by_id(meal_ids_map[chosen_index]) > 0:
                     msg.body(f"Refeição número {chosen_index} excluída com sucesso!")
                 else:
                     msg.body("Não foi possível excluir a refeição. Tente novamente.")
@@ -231,273 +204,116 @@ def webhook():
                 msg.body("Número de refeição inválido. Por favor, digite um número da lista.")
             
             set_user_state(from_number, 'none')
-            return str(resp) 
         else:
             msg.body("Não entendi qual refeição você quer excluir. Por favor, digite apenas o número da refeição na lista (ex: '1').")
-            return str(resp) 
+        return str(resp) 
 
-    wit_response = get_wit_ai_response(incoming_msg) 
-    parsed_data = parse_wit_ai_response(wit_response)
-    
-    intent = parsed_data['intent']
-    entities = parsed_data['entities']
+    # --- Análise de NLP e Roteamento de Intenção ---
+    parsed_data = parse_wit_ai_response(incoming_msg)
+    intent = parsed_data.get('intent')
+    entities = parsed_data.get('entities', {})
 
     print(f"Intenção detectada: {intent}, Entidades: {entities}")
 
-    if intent == 'registrar_peso':
+    # --- LÓGICA PARA CADA INTENÇÃO ---
+
+    if intent == 'registrar_refeicao':
+        food_items_list = entities.get('food_item', []) 
+        
+        if not food_items_list:
+            msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi 100g de arroz e 50g de feijão').")
+            return str(resp)
+
+        total_meal_calories, total_meal_carbs, total_meal_proteins, total_meal_fats = 0, 0, 0, 0
+        foods_for_db = [] 
+        response_lines_for_display = []
+        
+        # Itera sobre os alimentos identificados pelo Wit.ai
+        for food_query in food_items_list:
+            taco_data = get_taco_nutrition(food_query) # Chama a busca apenas uma vez por item
+            
+            if taco_data and taco_data['calories'] > 0:
+                total_meal_calories += taco_data['calories']
+                total_meal_carbs += taco_data['carbohydrates']
+                total_meal_proteins += taco_data['proteins']
+                total_meal_fats += taco_data['fats']
+                foods_for_db.append(taco_data['foods_listed']) 
+                response_lines_for_display.append(
+                    f"- {taco_data['foods_listed']} (Cal: {taco_data['calories']:.0f} | "
+                    f"Carb: {taco_data['carbohydrates']:.0f} | Prot: {taco_data['proteins']:.0f} | "
+                    f"Gord: {taco_data['fats']:.0f})"
+                )
+        
+        if not response_lines_for_display:
+            msg.body(f"Não encontrei dados nutricionais para '{incoming_msg}'. Por favor, tente ser mais específico.")
+            return str(resp)
+            # --- NOVA LÓGICA DE CONFIRMAÇÃO ---
+        
+        # Prepara os dados para salvar, mas ainda não salva
+        meal_context = {
+            "db_description": ", ".join(foods_for_db),
+            "calories": total_meal_calories,
+            "carbohydrates": total_meal_carbs,
+            "proteins": total_meal_proteins,
+            "fats": total_meal_fats
+        }
+
+        # Monta a mensagem de confirmação para o usuário
+        final_response_parts = ["Entendi o seguinte:"]
+        final_response_parts.extend(response_lines_for_display)
+        final_response_parts.append(f"\nTotal: {total_meal_calories:.0f} kcal, {total_meal_carbs:.0f}g Carb, {total_meal_proteins:.0f}g Prot, {total_meal_fats:.0f}g Gord.")
+        final_response_parts.append("\nEstá correto? Responda com 'sim' para salvar ou 'não' para cancelar.")
+        
+        msg.body("\n".join(final_response_parts))
+
+        # Define o novo estado e salva o contexto da refeição
+        set_user_state(from_number, 'awaiting_meal_confirmation', context_data=meal_context)
+
+        add_food_entry(from_number, ", ".join(foods_for_db), total_meal_calories, total_meal_carbs, total_meal_proteins, total_meal_fats)
+        
+        final_response_parts = ["Refeição registrada:"] + response_lines_for_display
+        final_response_parts.append(f"\nTotal da refeição: {total_meal_calories:.0f} kcal, {total_meal_carbs:.0f}g Carb, {total_meal_proteins:.0f}g Prot, {total_meal_fats:.0f}g Gord.")
+
+        calorie_goal = get_goal(from_number, 'calorie_intake')
+        if calorie_goal:
+            total_consumed_today = sum(f['calories'] for f in get_daily_summary(from_number)['foods']) 
+            remaining_calories = calorie_goal['target_value'] - total_consumed_today
+            if remaining_calories >= 0:
+                final_response_parts.append(f"Você ainda pode consumir {remaining_calories:.0f} kcal hoje para atingir sua meta de {calorie_goal['target_value']:.0f} kcal.")
+            else:
+                final_response_parts.append(f"🚨 Atenção: Você já excedeu sua meta diária de {calorie_goal['target_value']:.0f} kcal em {-remaining_calories:.0f} kcal.")
+        else:
+            final_response_parts.append("\nDefina uma meta de calorias diárias para saber quantas calorias ainda pode consumir (ex: 'Definir meta calorias 2000').")
+        
+        msg.body("\n".join(final_response_parts))
+
+    elif intent == 'registrar_peso':
         weight = entities.get('weight_value')
         if weight:
             try:
-                weight = float(weight)
-                add_weight_entry(from_number, weight)
-                msg.body(f"Peso de {weight} kg registrado com sucesso!")
-            except ValueError:
+                add_weight_entry(from_number, float(weight))
+                msg.body(f"Peso de {float(weight)} kg registrado com sucesso!")
+            except (ValueError, TypeError):
                 msg.body("Formato de peso inválido. Por favor, use um número (ex: 75.5).")
         else:
             msg.body("Não consegui encontrar o valor do peso. Por favor, diga seu peso (ex: 'Meu peso é 75.5').")
 
-    elif intent == 'registrar_refeicao':
-        food_items_list = entities.get('food_item', []) 
-        quantities_list = entities.get('quantity', []) 
-
-        if food_items_list or quantities_list: 
-            total_meal_calories = 0
-            total_meal_carbs = 0
-            total_meal_proteins = 0
-            total_meal_fats = 0
-            foods_for_db = [] 
-            
-            response_lines = ["Refeição registrada:"] 
-            
-            queries_for_taco = []
-            
-            unique_food_names_from_entities = set() 
-            for food_name in food_items_list:
-                unique_food_names_from_entities.add(food_name.lower())
-            
-            for q_item in quantities_list:
-                product_name = q_item.get('product')
-                if product_name:
-                    unique_food_names_from_entities.add(product_name.lower())
-            
-            for name in unique_food_names_from_entities:
-                queries_for_taco.append(name)
-
-            for q_item in quantities_list:
-                value = q_item.get('value')
-                unit = q_item.get('unit')
-                product_name = q_item.get('product') 
-
-                if value and unit and product_name:
-                    queries_for_taco.append(f"{value}{unit} de {product_name}") 
-                    queries_for_taco.append(f"{value} {unit} de {product_name}") 
-                    queries_for_taco.append(f"{value}{unit} {product_name}")     
-                elif q_item.get('raw'): 
-                    queries_for_taco.append(q_item['raw'])
-            
-            final_queries = []
-            seen_queries = set()
-            for q in queries_for_taco:
-                normalized_q = q.lower()
-                if normalized_q not in seen_queries:
-                    final_queries.append(q)
-                    seen_queries.add(normalized_q)
-            
-            final_queries.sort(key=lambda x: (
-                1 if x.lower() in unique_food_names_from_entities else 0, 
-                len(x) 
-            ), reverse=True) 
-
-            print(f"Consultando TACO com: {final_queries}") 
-
-            if not final_queries: 
-                msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
-                return str(resp)
-
-            items_found_original_names = set() 
-            response_lines_for_display = [] 
-            
-            for item_query in final_queries:
-                taco_data = get_taco_nutrition(item_query) 
-                
-                if taco_data and taco_data['calories'] > 0 and taco_data['original_alimento'].lower() not in items_found_original_names:
-                    total_meal_calories += taco_data['calories']
-                    total_meal_carbs += taco_data['carbohydrates']
-                    total_meal_proteins += taco_data['proteins']
-                    total_meal_fats += taco_data['fats']
-                    
-                    foods_for_db.append(taco_data['foods_listed']) 
-                    
-                    response_lines_for_display.append(
-                        f"- {taco_data['foods_listed']} (Cal: {taco_data['calories']:.0f} | "
-                        f"Carb: {taco_data['carbohydrates']:.0f} | Prot: {taco_data['proteins']:.0f} | "
-                        f"Gord: {taco_data['fats']:.0f})"
-                    )
-                    items_found_original_names.add(taco_data['original_alimento'].lower()) 
-                else:
-                    is_redundant_message = False
-                    base_name_from_query = _get_base_food_name_from_query_string(item_query)
-                    
-                    for found_original_name in items_found_original_names:
-                        if base_name_from_query and (base_name_from_query in found_original_name or found_original_name in base_name_from_query):
-                            is_redundant_message = True
-                            break
-                    
-                    if not is_redundant_message:
-                        response_lines_for_display.append(f"- Não encontrei dados nutricionais para '{item_query}' na TACO.")
-            
-            db_description = ", ".join(foods_for_db) if foods_for_db else "Itens não processados"
-            
-            add_food_entry(
-                from_number,
-                db_description, 
-                total_meal_calories,
-                total_meal_carbs,
-                total_meal_proteins,
-                total_meal_fats
-            )
-            
-            calorie_goal = get_goal(from_number, 'calorie_intake')
-            summary = get_daily_summary(from_number) 
-            total_consumed_today = sum(f['calories'] for f in summary['foods']) 
-
-            final_response = "\n".join(response_lines_for_display)
-            final_response += f"\n\nTotal da refeição: {total_meal_calories:.0f} kcal, {total_meal_carbs:.0f}g Carb, {total_meal_proteins:.0f}g Prot, {total_meal_fats:.0f}g Gord."
-
-            if calorie_goal:
-                remaining_calories = calorie_goal['target_value'] - total_consumed_today
-                if remaining_calories >= 0:
-                    final_response += f"\nVocê ainda pode consumir {remaining_calories:.0f} kcal hoje para atingir sua meta de {calorie_goal['target_value']:.0f} kcal."
-                else:
-                    final_response += f"\n🚨 Atenção: Você já excedeu sua meta diária de {calorie_goal['target_value']:.0f} kcal em {-remaining_calories:.0f} kcal."
-            else:
-                final_response += "\nDefina uma meta de calorias diárias para saber quantas calorias ainda pode consumir (ex: 'Definir meta calorias 2000')."
-            
-            msg.body(final_response)
-
-        else: 
-            msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi arroz e feijão').")
-
-    elif intent == 'registrar_exercicio':
-        activity_name_list = entities.get('activity_name', []) 
-        duration_value = entities.get('duration_value')
-        duration_unit_list = entities.get('duration_unit', []) 
-
-        activity_name = activity_name_list[0] if activity_name_list else None
-        duration_unit = duration_unit_list[0] if duration_unit_list else None
-
-
-        if activity_name and duration_value and duration_unit:
-            try:
-                duration_minutes = int(duration_value)
-                if duration_unit.lower() in ['horas', 'hr', 'hora']: 
-                    duration_minutes *= 60
-
-                summary_for_weight = get_daily_summary(from_number)
-                user_weight_kg = summary_for_weight['last_weight'] if summary_for_weight['last_weight'] else 70
-
-                calories_burned = calculate_calories_burned(activity_name, duration_minutes, user_weight_kg)
-
-                if calories_burned > 0:
-                    add_exercise_entry(from_number, activity_name, duration_minutes, calories_burned)
-                    msg.body(f"Registrado: {activity_name} por {duration_value} {duration_unit}. Calorias queimadas estimadas: {calories_burned:.2f}.")
-                else:
-                    msg.body(f"Não consegui estimar as calorias para '{activity_name}'. Tente um exercício mais comum.")
-            except ValueError:
-                msg.body("Formato de duração inválido. Use números (ex: '30 minutos').")
-        else:
-            msg.body("Não consegui identificar o exercício ou a duração. Use 'Fiz [exercício] por [tempo]' (ex: 'Fiz corrida por 30 minutos').")
-
-    elif intent == 'obter_resumo_diario':
-        summary = get_daily_summary(from_number)
-        if summary:
-            food_summary = []
-            total_food_calories = 0
-            total_food_carbs = 0
-            total_food_proteins = 0
-            total_food_fats = 0
-
-            for f in summary['foods']:
-                food_summary.append(f"- {f['foods_description']} (Cal: {f['calories']:.0f} | Carb: {f['carbohydrates']:.0f} | Prot: {f['proteins']:.0f} | Gord: {f['fats']:.0f})")
-                total_food_calories += f['calories']
-                total_food_carbs += f['carbohydrates']
-                total_food_proteins += f['proteins']
-                total_food_fats += f['fats']
-            
-            food_summary_text = "\n".join(food_summary) if food_summary else 'Nenhum alimento registrado.'
-
-            exercise_summary = "\n".join([f"- {e['activity_name']} por {e['duration_minutes']} min ({e['calories_burned']:.2f} kcal) queimadas" for e in summary['exercises']])
-            weight_info = f"Seu último peso registrado: {summary['last_weight']:.1f} kg" if summary['last_weight'] else "Nenhum peso registrado."
-            total_calories_burned = sum(e['calories_burned'] for e in summary['exercises'])
-
-            response_text = (
-                f"--- Alimentação ({total_food_calories:.2f} kcal) ---\n"
-                f"{food_summary_text}\n"
-                f"(Total Carb: {total_food_carbs:.0f}g | Prot: {total_food_proteins:.0f}g | Gord: {total_food_fats:.0f}g)\n\n"
-                f"--- Exercícios ({total_calories_burned:.2f} kcal queimadas) ---\n"
-                f"{exercise_summary if exercise_summary else 'Nenhum exercício registrado.'}\n\n"
-                f"{weight_info}\n\n"
-                f"Balanço calórico estimado: {total_food_calories - total_calories_burned:.2f} kcal (Calorias Consumidas - Calorias Queimadas)"
-            )
-            msg.body(response_text)
-        else:
-            msg.body("Nenhum registro encontrado para hoje.")
-
-    elif intent == 'listar_refeicoes': 
-        summary = get_daily_summary(from_number)
-        food_summary_list = summary['foods']
-        
-        if food_summary_list:
-            response_lines = ["Suas refeições de hoje:"]
-            total_calories_consumed = 0
-            for food_entry in food_summary_list:
-                food_description = food_entry['foods_description']
-                calories = food_entry['calories']
-                carbs = food_entry['carbohydrates']
-                proteins = food_entry['proteins']
-                fats = food_entry['fats']
-
-                response_lines.append(
-                    f"- {food_description} (Cal: {calories:.0f} | Carb: {carbs:.0f} | Prot: {proteins:.0f} | Gord: {fats:.0f})"
-                )
-                total_calories_consumed += calories
-            response_lines.append(f"\nTotal de calorias consumidas hoje: {total_calories_consumed:.2f} kcal.")
-            msg.body("\n".join(response_lines))
-        else:
-            msg.body("Você ainda não registrou nenhuma refeição hoje. Use 'comi [alimento]' para registrar.")
-
-    elif intent == 'limpar_refeicoes_dia':
-        deleted_count = delete_all_food_entries_for_day(from_number)
-        if deleted_count > 0:
-            msg.body(f"Todas as {deleted_count} refeições de hoje foram excluídas com sucesso!")
-        else:
-            msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
-    
     elif intent == 'excluir_refeicao_especifica':
         entry_number_list = entities.get('entry_number', [])
-        
         if entry_number_list: 
             chosen_index = int(entry_number_list[0]) 
-            
             current_meals = get_food_entries_for_day_indexed(from_number)
             meal_ids_map = { (i+1): meal['id'] for i, meal in enumerate(current_meals) }
-            
             if meal_ids_map and chosen_index in meal_ids_map:
-                meal_id_to_delete = meal_ids_map[chosen_index]
-                deleted_rows = delete_food_entry_by_id(meal_id_to_delete)
-                
-                if deleted_rows > 0:
+                if delete_food_entry_by_id(meal_ids_map[chosen_index]) > 0:
                     msg.body(f"Refeição número {chosen_index} excluída com sucesso!")
                 else:
                     msg.body("Não foi possível excluir a refeição. Tente novamente.")
             else:
                 msg.body("Número de refeição inválido. Por favor, digite um número que esteja na sua lista de refeições do dia.")
-            
             set_user_state(from_number, 'none')
-            return str(resp) 
         else:
             meals_today = get_food_entries_for_day_indexed(from_number)
-            
             if not meals_today:
                 msg.body("Você não tem nenhuma refeição registrada hoje para excluir.")
                 set_user_state(from_number, 'none')
@@ -507,113 +323,68 @@ def webhook():
                 for i, meal in enumerate(meals_today):
                     response_lines.append(f"{i+1}: {meal['foods_description']} ({meal['calories']:.0f} kcal)")
                     meal_ids_map[i+1] = meal['id'] 
-                
                 response_lines.append("\nQual refeição você quer excluir? Por favor, envie APENAS o número (ex: '1').")
-                
                 set_user_state(from_number, 'awaiting_meal_delete_number', meal_ids_map)
-                
                 msg.body("\n".join(response_lines))
-
+    
     elif intent == 'definir_lembrete':
         reminder_text_list = entities.get('reminder_text', [])
         wit_time_obj = entities.get('wit_time') 
-        
         reminder_text = reminder_text_list[0] if reminder_text_list else None
-
         reminder_time_str = None
         if wit_time_obj:
             try:
-                if 'T' in wit_time_obj and ':' in wit_time_obj: 
-                    time_part = wit_time_obj.split('T')[1].split(':')[0:2] 
-                    reminder_time_str = ":".join(time_part)
-                elif re.match(r'^\d{2}:\d{2}$', wit_time_obj): 
-                     reminder_time_str = wit_time_obj
-                else: 
-                    dt_object = datetime.fromisoformat(wit_time_obj.replace('Z', '+00:00')) 
-                    reminder_time_str = dt_object.strftime('%H:%M')
-
-            except Exception as e: 
-                print(f"Erro ao parsear wit_time_obj '{wit_time_obj}': {e}")
-                if re.match(r'^\d{2}:\d{2}$', wit_time_obj):
-                    reminder_time_str = wit_time_obj
-
+                # Tenta extrair HH:MM de formatos como '2025-06-14T10:00:00.000-03:00'
+                time_part = wit_time_obj.split('T')[1]
+                reminder_time_str = ":".join(time_part.split(':')[0:2])
+            except (IndexError, AttributeError):
+                reminder_time_str = None # Se falhar, continua para a próxima verificação
 
         if reminder_text and reminder_time_str:
             if add_reminder(from_number, reminder_text, reminder_time_str):
-                scheduler.remove_all_jobs()
-                scheduler.add_job(
-                    send_good_morning_message,
-                    CronTrigger(hour=8, minute=0),
-                    id='daily_good_morning',
-                    replace_existing=True
-                )
-                with app.app_context():
-                    schedule_all_reminders()
-                msg.body(f"Lembrete '{reminder_text}' às {reminder_time_str} desativado com sucesso.")
+                hour, minute = map(int, reminder_time_str.split(':'))
+                job_id = _get_job_id(from_number, reminder_text, reminder_time_str)
+                scheduler.add_job(send_reminder_message, CronTrigger(hour=hour, minute=minute), args=[from_number, reminder_text], id=job_id, replace_existing=True)
+                msg.body(f"Lembrete '{reminder_text}' definido para às {reminder_time_str}.")
             else:
-                msg.body("Não consegui definir o lembrete. Verifique o formato da hora (HH:MM).")
+                 msg.body("Não consegui definir o lembrete. Talvez já exista um com esse texto e hora.")
         else:
-            msg.body("Não consegui identificar o texto ou a hora do lembrete. Use 'Definir lembrete [texto] [HH:MM]' (ex: 'Definir lembrete beber agua 10:00').")
-
-    elif intent == 'listar_lembretes': 
-        reminders = get_user_reminders(from_number)
-        if reminders:
-            response_lines = ["Seus lembretes ativos:"]
-            for r in reminders:
-                response_lines.append(f"- '{r['reminder_text']}' às {r['reminder_time']}")
-            response_lines.append("\nPara desativar um, diga 'Desativar lembrete [texto] [HH:MM]'.")
-            msg.body("\n".join(response_lines))
-        else:
-            msg.body("Você não tem lembretes ativos. Use 'definir lembrete' para criar um.")
+            msg.body("Não consegui identificar o texto ou a hora do lembrete. Use 'Definir lembrete [texto] às [HH:MM]' (ex: 'Definir lembrete beber agua às 10:00').")
 
     elif intent == 'desativar_lembrete': 
         reminder_text_list = entities.get('reminder_text', [])
         wit_time_obj = entities.get('wit_time')
-        
         reminder_text = reminder_text_list[0] if reminder_text_list else None
-        
         reminder_time_str = None
         if wit_time_obj:
             try:
-                if 'T' in wit_time_obj and ':' in wit_time_obj:
-                    time_part = wit_time_obj.split('T')[1].split(':')[0:2]
-                    reminder_time_str = ":".join(time_part)
-                elif re.match(r'^\d{2}:\d{2}$', wit_time_obj):
-                     reminder_time_str = wit_time_obj
-                else:
-                    dt_object = datetime.fromisoformat(wit_time_obj.replace('Z', '+00:00'))
-                    reminder_time_str = dt_object.strftime('%H:%M')
-            except Exception as e:
-                print(f"Erro ao parsear wit_time_obj '{wit_time_obj}': {e}")
-                if re.match(r'^\d{2}:\d{2}$', wit_time_obj):
-                    reminder_time_str = wit_time_obj
+                time_part = wit_time_obj.split('T')[1]
+                reminder_time_str = ":".join(time_part.split(':')[0:2])
+            except (IndexError, AttributeError):
+                reminder_time_str = None
 
         if reminder_text and reminder_time_str:
+            job_id = _get_job_id(from_number, reminder_text, reminder_time_str)
             if deactivate_reminder(from_number, reminder_text, reminder_time_str):
-                scheduler.remove_all_jobs()
-                scheduler.add_job(
-                    send_good_morning_message,
-                    CronTrigger(hour=8, minute=0),
-                    id='daily_good_morning',
-                    replace_existing=True
-                )
-                with app.app_context():
-                    schedule_all_reminders()
+                if scheduler.get_job(job_id):
+                    scheduler.remove_job(job_id)
                 msg.body(f"Lembrete '{reminder_text}' às {reminder_time_str} desativado com sucesso.")
             else:
                 msg.body("Não encontrei esse lembrete para desativar. Verifique o texto e a hora.")
         else:
-            msg.body("Não consegui identificar o texto ou a hora do lembrete a desativar. Use 'Desativar lembrete [texto] [HH:MM]'.")
+            msg.body("Não consegui identificar o texto ou a hora do lembrete a desativar. Use 'Desativar lembrete [texto] às [HH:MM]'.")
 
+    # ... Adicione aqui os outros 'elif' para 'listar_lembretes', 'saudacao', etc. que já funcionavam ...
+    # Exemplo:
     elif intent == 'saudacao': 
         msg.body("Olá! Eu sou seu assistente de saúde. Como posso te ajudar hoje?")
-
+    
     else: # Intenção não reconhecida
-        msg.body("Desculpe, não entendi o que você quis dizer. Por favor, tente de outra forma ou use um dos comandos: registrar peso, comi, fiz exercicio, resumo diario, minhas refeicoes, definir meta, definir lembrete, meus lembretes.")
+        msg.body("Desculpe, não entendi o que você quis dizer. Por favor, tente de outra forma.")
 
     return str(resp)
 
 if __name__ == "__main__":
     print("6. Tentando rodar o aplicativo Flask.") 
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
-    print("7. Aplicativo Flask rodando (se você viu a mensagem de running, não verá esta).") 
+    print("7. Aplicativo Flask rodando.")
