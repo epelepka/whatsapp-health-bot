@@ -143,6 +143,31 @@ def _get_base_food_name_from_query_string(query_str):
 
 @app.route("/webhook", methods=['POST'])
 def webhook():
+
+     # --- INÍCIO DO CÓDIGO DE DEPURACÃO ---
+    print("--- Nova Requisição Recebida ---")
+    
+    auth_token_from_env = os.environ.get('TWILIO_AUTH_TOKEN')
+    print(f"1. Token do Ambiente: {'Encontrado' if auth_token_from_env else 'NÃO ENCONTRADO'}") # Apenas confirma se o token foi lido
+
+    url_recebida = request.url
+    print(f"2. URL para Validação: {url_recebida}")
+
+    post_vars_recebidos = request.form.to_dict()
+    print(f"3. Parâmetros POST: {post_vars_recebidos}")
+
+    twilio_signature_header = request.headers.get('X-Twilio-Signature', '')
+    print(f"4. Assinatura Recebida: {twilio_signature_header}")
+    print("--- Fim dos Dados de Depuração ---")
+    # --- FIM DO CÓDIGO DE DEPURACÃO ---
+
+    # O código de validação continua o mesmo
+    validator = RequestValidator(auth_token_from_env)
+    
+    if not validator.validate(url_recebida, post_vars_recebidos, twilio_signature_header):
+        print("!!! VALIDAÇÃO FALHOU !!!") # Adiciona um log claro de falha
+        return abort(403)
+    
     # Valida se a requisição veio mesmo do Twilio
     validator = RequestValidator(os.environ.get('TWILIO_AUTH_TOKEN'))
     
@@ -159,7 +184,7 @@ def webhook():
     # Se a validação passar, o código continua normalmente
     msg_body = request.form.get('Body', '').strip()
     response_text = generate_response(msg_body)
-    
+
     incoming_msg = request.values.get('Body', '') 
     from_number = request.values.get('From', '') 
     user_phone_number = request.form.get('From')
