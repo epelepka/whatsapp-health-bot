@@ -1,4 +1,3 @@
-# taco_api.py (Versão para PostgreSQL)
 import psycopg2
 from psycopg2 import sql
 import os
@@ -11,9 +10,6 @@ def get_db_connection():
     """Retorna uma conexão com o banco de dados PostgreSQL."""
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL não está configurada! Não é possível conectar ao PostgreSQL.")
-    
-    # O psycopg2 precisa do SSLMode 'require' ou 'no-verify' para conexões externas
-    # Railway geralmente pede require
     return psycopg2.connect(DATABASE_URL + "?sslmode=require") # Adicionado sslmode=require
 
 def get_taco_nutrition(query):
@@ -133,31 +129,3 @@ def get_taco_nutrition(query):
         cursor.close()
         conn.close()
         return None
-
-    # Teste (opcional)
-    if __name__ == '__main__':
-        # Este teste pressupõe que você já rodou populate_pg_taco.py localmente
-        # para popular o seu banco de dados PostgreSQL do Railway.
-        print("--- Testando Taco API Localmente (PostgreSQL) ---")
-        
-        test_queries = [
-            "arroz, integral, cozido",
-            "100g de arroz",
-            "feijão, cozido",
-            "50g de feijao",
-            "batata, cozida",
-            "100g de batata",
-            "frango, filé, grelhado",
-            "cafe, infuso"
-        ]
-        
-        for query in test_queries:
-            print(f"\nBuscando: '{query}'")
-            try:
-                info = get_taco_nutrition(query)
-                if info:
-                    print(f"  Encontrado: {info['foods_listed']} | Cal: {info['calories']:.0f} | Carb: {info['carbohydrates']:.0f} | Prot: {info['proteins']:.0f} | Gord: {info['fats']:.0f}")
-                else:
-                    print(f"  Não encontrado para '{query}'.")
-            except Exception as e:
-                print(f"  ERRO ao buscar '{query}': {e}")

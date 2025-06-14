@@ -1,38 +1,29 @@
-# database.py (Versão para PostgreSQL)
+# database.py
 import os
-import psycopg2 # Novo import para PostgreSQL
-from psycopg2 import sql # Para construir queries seguras
+import psycopg2 
+from psycopg2 import sql 
 from datetime import datetime, date, time
-import json # Para user_state context_data
+import json 
 
-# URL de conexão com o PostgreSQL (será injetada pelo Railway como DATABASE_URL)
-# Em desenvolvimento local, você pode definir DATABASE_URL no seu .env
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 def get_db_connection():
-    """Retorna uma conexão com o banco de dados PostgreSQL."""
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL não está configurada! Não é possível conectar ao PostgreSQL.")
-
-    # O psycopg2 precisa do SSLMode 'require' ou 'no-verify' para conexões externas
-    # Railway geralmente pede require
-    return psycopg2.connect(DATABASE_URL + "?sslmode=require") # Adicionado sslmode=require
+    return psycopg2.connect(DATABASE_URL + "?sslmode=require")
 
 def init_db():
-    """Inicializa o esquema do banco de dados (cria tabelas se não existirem)."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Tabela de usuários
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY, -- SERIAL para autoincremento no PostgreSQL
+            id SERIAL PRIMARY KEY, 
             whatsapp_number TEXT UNIQUE NOT NULL,
             last_interaction_date DATE DEFAULT CURRENT_DATE
         );
     ''')
 
-    # Tabela food_entries
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS food_entries (
             id SERIAL PRIMARY KEY,
@@ -47,7 +38,6 @@ def init_db():
         );
     ''')
 
-    # Tabela weight_entries
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS weight_entries (
             id SERIAL PRIMARY KEY,
@@ -58,7 +48,6 @@ def init_db():
         );
     ''')
 
-    # Tabela exercise_entries
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS exercise_entries (
             id SERIAL PRIMARY KEY,
@@ -71,7 +60,6 @@ def init_db():
         );
     ''')
 
-    # Tabela goals
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS goals (
             id SERIAL PRIMARY KEY,
@@ -84,7 +72,6 @@ def init_db():
         );
     ''')
 
-    # Tabela reminders
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminders (
             id SERIAL PRIMARY KEY,
@@ -95,7 +82,6 @@ def init_db():
         );
     ''')
 
-    # Tabela taco_foods (Adaptada para PostgreSQL)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS taco_foods (
             id SERIAL PRIMARY KEY,
@@ -107,12 +93,11 @@ def init_db():
         );
     ''')
 
-    # Tabela user_state
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_state (
             user_id INTEGER PRIMARY KEY REFERENCES users(id),
             state TEXT NOT NULL,
-            context_data TEXT -- JSON no PostgreSQL é TEXT ou JSONB
+            context_data TEXT 
         );
     ''')
 
@@ -120,7 +105,6 @@ def init_db():
     cursor.close()
     conn.close()
 
-# --- Funções de CRUD (adaptadas para PostgreSQL) ---
 def _fetch_one_as_dict(cursor):
     row = cursor.fetchone()
     if row:
@@ -139,10 +123,10 @@ def _fetch_all_as_dict(cursor):
 def get_or_create_user(whatsapp_number):
     conn = get_db_connection()
     cursor = conn.cursor()
-
+    
     cursor.execute("SELECT id FROM users WHERE whatsapp_number = %s", (whatsapp_number,))
     user = _fetch_one_as_dict(cursor)
-
+    
     if user:
         cursor.close()
         conn.close()
@@ -232,7 +216,7 @@ def get_daily_summary(whatsapp_number):
     user_id = get_or_create_user(whatsapp_number)
     conn = get_db_connection()
     cursor = conn.cursor()
-
+    
     cursor.execute(
         "SELECT foods_description, calories, carbohydrates, proteins, fats FROM food_entries WHERE user_id = %s AND entry_date = CURRENT_DATE",
         (user_id,)
@@ -250,7 +234,7 @@ def get_daily_summary(whatsapp_number):
         (user_id,)
     )
     last_weight_row = _fetch_one_as_dict(cursor)
-
+    
     cursor.close()
     conn.close()
 
