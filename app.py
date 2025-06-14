@@ -256,10 +256,14 @@ def webhook():
             "original_query": food_query
         }
         
-        confirmation_lines = [f"Entendi: {best_guess['foods_listed']} (Cal: {best_guess['calories']:.0f} | Carb: {best_guess['carbohydrates']:.0f} | Prot: {best_guess['proteins']:.0f} | Gord: {best_guess['fats']:.0f})."]
-        confirmation_lines.append("\nEstá correto? Responda com 'sim' ou 'não'.")
-        msg.body("\n".join(confirmation_lines))
+        # CÓDIGO DE TESTE
+        # Monta uma mensagem de teste BEM CURTA
+        test_message = "TESTE: Encontrei uma opção. Está correto? (sim/não)"
+        msg.body(test_message)
+        
+        print(f"DEBUG: Enviando mensagem de teste curta: '{test_message}'")
 
+        # O resto da lógica continua igual
         set_user_state(from_number, 'awaiting_meal_confirmation', context_data=meal_context)
 
     elif intent == 'registrar_peso':
