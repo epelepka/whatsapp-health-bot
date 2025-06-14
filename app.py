@@ -16,7 +16,6 @@ import atexit
 print("1. Imports carregados.") 
 
 # Importa as funções dos outros arquivos
-# ATUALIZADO: Importa a nova função de busca de opções
 from database import (init_db, get_or_create_user, add_food_entry, add_weight_entry, 
                       add_exercise_entry, get_daily_summary, set_goal, get_goal, 
                       add_reminder, get_active_reminders, get_user_reminders, 
@@ -26,7 +25,7 @@ from database import (init_db, get_or_create_user, add_food_entry, add_weight_en
                       set_user_state, get_user_state)
 from activity_api import calculate_calories_burned
 from wit_nlp import get_wit_ai_response, parse_wit_ai_response 
-from taco_api import search_taco_options # <-- MUDANÇA AQUI
+from taco_api import search_taco_options
 
 print("2. Funções do banco de dados e APIs importadas.") 
 
@@ -163,8 +162,10 @@ def webhook():
                 response_lines = ["Ok. Encontrei estas outras opções para sua busca:"]
                 alternatives_map = {}
                 for i, food_data in enumerate(alternatives):
-                    response_lines.append(f"{i+1}. {food_data['original_alimento']}")
-                    alternatives_map[i+1] = food_data
+                    # A chave do mapa agora é uma string para corresponder ao que é salvo no DB
+                    key = str(i + 1)
+                    response_lines.append(f"{key}. {food_data['original_alimento']}")
+                    alternatives_map[key] = food_data
                 
                 response_lines.append("\nPor favor, digite o número da opção correta. Se nenhuma estiver certa, digite 'cancela'.")
                 msg.body("\n".join(response_lines))
@@ -179,8 +180,10 @@ def webhook():
         
         return str(resp)
     
+    # ***** BLOCO CORRIGIDO *****
     elif current_state == 'awaiting_alternative_selection':
-        answer = incoming_msg.lower().strip()
+        # Limpa a resposta do usuário, removendo pontos e espaços
+        answer = incoming_msg.lower().strip().replace('.', '')
         alternatives_map = context_data.get('alternatives_map', {})
 
         if answer in ['cancela', 'cancelar']:
@@ -188,18 +191,14 @@ def webhook():
             set_user_state(from_number, 'none')
             return str(resp)
 
-        try:
-            choice = int(answer)
-            if choice in alternatives_map:
-                chosen_food = alternatives_map[choice]
-                add_food_entry(from_number, chosen_food['foods_listed'], chosen_food['calories'], chosen_food['carbohydrates'], chosen_food['proteins'], chosen_food['fats'])
-                msg.body(f"✅ Certo! Salvei '{chosen_food['original_alimento']}' no seu diário.")
-                set_user_state(from_number, 'none')
-            else:
-                msg.body("Número inválido. Por favor, escolha um número da lista ou digite 'cancela'.")
-        
-        except ValueError:
-            msg.body("Por favor, digite apenas o número da opção desejada ou 'cancela'.")
+        # Compara a resposta (string) com as chaves do mapa (que também são strings)
+        if answer in alternatives_map:
+            chosen_food = alternatives_map[answer]
+            add_food_entry(from_number, chosen_food['foods_listed'], chosen_food['calories'], chosen_food['carbohydrates'], chosen_food['proteins'], chosen_food['fats'])
+            msg.body(f"✅ Certo! Salvei '{chosen_food['original_alimento']}' no seu diário.")
+            set_user_state(from_number, 'none')
+        else:
+            msg.body("Número inválido. Por favor, escolha um número da lista ou digite 'cancela'.")
 
         return str(resp)
 
@@ -211,8 +210,8 @@ def webhook():
             chosen_index = int(entry_number_list[0]) 
             meal_ids_map = context_data.get('meal_ids_map') 
             
-            if meal_ids_map and chosen_index in meal_ids_map:
-                if delete_food_entry_by_id(meal_ids_map[chosen_index]) > 0:
+            if meal_ids_map and str(chosen_index) in meal_ids_map:
+                if delete_food_entry_by_id(meal_ids_map[str(chosen_index)]) > 0:
                     msg.body(f"Refeição número {chosen_index} excluída com sucesso!")
                 else:
                     msg.body("Não foi possível excluir a refeição. Tente novamente.")
@@ -241,7 +240,6 @@ def webhook():
             msg.body("Não consegui identificar o que você comeu. Por favor, diga (ex: 'Comi 100g de arroz e 50g de feijão').")
             return str(resp)
 
-        # Trata apenas o primeiro alimento por simplicidade no fluxo de conversa
         food_query = food_items_list[0]
         
         food_options = search_taco_options(food_query)
