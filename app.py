@@ -162,7 +162,6 @@ def webhook():
                 response_lines = ["Ok. Encontrei estas outras opções para sua busca:"]
                 alternatives_map = {}
                 for i, food_data in enumerate(alternatives):
-                    # A chave do mapa agora é uma string para corresponder ao que é salvo no DB
                     key = str(i + 1)
                     response_lines.append(f"{key}. {food_data['original_alimento']}")
                     alternatives_map[key] = food_data
@@ -180,18 +179,17 @@ def webhook():
         
         return str(resp)
     
-    # ***** BLOCO CORRIGIDO *****
+    # ***** BLOCO FINALMENTE CORRIGIDO *****
     elif current_state == 'awaiting_alternative_selection':
-        # Limpa a resposta do usuário, removendo pontos e espaços
         answer = incoming_msg.lower().strip().replace('.', '')
         alternatives_map = context_data.get('alternatives_map', {})
 
         if answer in ['cancela', 'cancelar']:
             msg.body("Ok, operação cancelada.")
             set_user_state(from_number, 'none')
+            # ADICIONADO RETURN PARA PARAR A EXECUÇÃO
             return str(resp)
 
-        # Compara a resposta (string) com as chaves do mapa (que também são strings)
         if answer in alternatives_map:
             chosen_food = alternatives_map[answer]
             add_food_entry(from_number, chosen_food['foods_listed'], chosen_food['calories'], chosen_food['carbohydrates'], chosen_food['proteins'], chosen_food['fats'])
@@ -199,7 +197,8 @@ def webhook():
             set_user_state(from_number, 'none')
         else:
             msg.body("Número inválido. Por favor, escolha um número da lista ou digite 'cancela'.")
-
+        
+        # ADICIONADO RETURN PARA PARAR A EXECUÇÃO EM TODOS OS CASOS
         return str(resp)
 
     elif current_state == 'awaiting_meal_delete_number':
@@ -226,8 +225,8 @@ def webhook():
     # --- Análise de NLP e Roteamento de Intenção ---
     wit_response = get_wit_ai_response(incoming_msg) 
     parsed_data = parse_wit_ai_response(wit_response)
-    intent = parsed_data['intent']
-    entities = parsed_data['entities']
+    intent = parsed_data.get('intent')
+    entities = parsed_data.get('entities', {})
 
     print(f"Intenção detectada: {intent}, Entidades: {entities}")
 
