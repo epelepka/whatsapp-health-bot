@@ -61,13 +61,12 @@ def webhook():
     current_state = user_state['state']
     context_data = user_state.get('context_data') or {}
     
-    resp = MessagingResponse()
-    msg = resp.message()
-    
+    # Análise de NLP feita uma vez no início
     wit_response = get_wit_ai_response(incoming_msg)
     parsed_data = parse_wit_ai_response(wit_response)
     intent = parsed_data.get('intent')
     
+    # Lógica de Reset Inteligente
     interrupting_intents = ['registrar_refeicao', 'registrar_peso', 'definir_meta', 'saudacao'] # etc.
     if current_state != 'none' and intent in interrupting_intents:
         set_user_state(from_number, 'none')
@@ -76,6 +75,7 @@ def webhook():
     # --- Lógica de Máquina de Estados ---
     
     if current_state == 'awaiting_meal_confirmation':
+        resp = MessagingResponse()
         answer = incoming_msg.lower().strip()
         meal_context = context_data
 
@@ -83,16 +83,15 @@ def webhook():
             best_guess = meal_context.get('best_guess')
             if best_guess:
                 add_food_entry(from_number, best_guess['foods_listed'], best_guess['calories'], best_guess['carbohydrates'], best_guess['proteins'], best_guess['fats'])
-                
                 total_consumed_today = sum(f['calories'] for f in get_daily_summary(from_number)['foods'])
                 response_text = f"✅ Salvo! ({best_guess['original_alimento']})\n\nTotal de hoje: {total_consumed_today:.0f} kcal."
                 calorie_goal = get_goal(from_number, 'calorie_intake')
                 if calorie_goal:
                     remaining = calorie_goal['target_value'] - total_consumed_today
                     response_text += f"\nMeta: {remaining:.0f} kcal restantes."
-                msg.body(response_text)
+                resp.message(response_text)
             else:
-                msg.body("🤔 Ocorreu um erro, tente de novo.")
+                resp.message("🤔 Ocorreu um erro, tente de novo.")
             set_user_state(from_number, 'none')
 
         elif answer in ['não', 'nao', 'n', 'errado', 'outro']:
@@ -105,25 +104,23 @@ def webhook():
                     response_lines.append(f"{key}. {food_data['original_alimento']}")
                     alternatives_map[key] = food_data
                 response_lines.append("\nDigite o número da opção correta ou 'cancela'.")
-                msg.body("\n".join(response_lines))
+                resp.message("\n".join(response_lines))
                 set_user_state(from_number, 'awaiting_alternative_selection', context_data={'alternatives_map': alternatives_map})
             else:
-                msg.body("❌ Ok, cancelado. Não encontrei outras opções.")
+                resp.message("❌ Ok, cancelado. Não encontrei outras opções.")
                 set_user_state(from_number, 'none')
-        
         else:
-            msg.body("Não entendi. Por favor, responda com 'sim' ou 'não'.")
-        
+            resp.message("Não entendi. Por favor, responda com 'sim' ou 'não'.")
         return str(resp)
     
     elif current_state == 'awaiting_alternative_selection':
+        resp = MessagingResponse()
         answer = incoming_msg.lower().strip().replace('.', '')
         alternatives_map = context_data.get('alternatives_map', {})
 
         if answer in ['cancela', 'cancelar']:
-            msg.body("Ok, operação cancelada.")
+            resp.message("Ok, operação cancelada.")
             set_user_state(from_number, 'none')
-
         elif answer in alternatives_map:
             chosen_food = alternatives_map[answer]
             add_food_entry(from_number, chosen_food['foods_listed'], chosen_food['calories'], chosen_food['carbohydrates'], chosen_food['proteins'], chosen_food['fats'])
@@ -134,59 +131,63 @@ def webhook():
             if calorie_goal:
                 remaining = calorie_goal['target_value'] - total_consumed_today
                 response_text += f"\nMeta: {remaining:.0f} kcal restantes."
-            msg.body(response_text)
-            
+            resp.message(response_text)
             set_user_state(from_number, 'none')
         else:
-            msg.body("Número inválido. Escolha um número da lista ou digite 'cancela'.")
-        
+            resp.message("Número inválido. Escolha um número da lista ou digite 'cancela'.")
         return str(resp)
 
     # --- Roteamento de Intenção ---
     
+    resp = MessagingResponse() # Cria um objeto de resposta para a intenção atual
     entities = parsed_data.get('entities', {})
 
     if intent == 'registrar_refeicao':
         food_items_list = entities.get('food_item', []) 
         if not food_items_list:
-            msg.body("Não consegui identificar o que você comeu...")
+            resp.message("Não consegui identificar o que você comeu...")
         else:
             food_query = food_items_list[0]
             food_options = search_taco_options(food_query)
             
             if not food_options:
-                msg.body(f"Não encontrei dados para '{food_query}'.")
+                resp.message(f"Não encontrei dados para '{food_query}'.")
             else:
                 best_guess = food_options[0]
                 alternatives = food_options[1:]
                 meal_context = {"best_guess": best_guess, "alternatives": alternatives}
                 
-                msg.body(f"Encontrei: {best_guess['original_alimento']}. Está correto? (sim/não)")
+                resp.message(f"Encontrei: {best_guess['original_alimento']}. Está correto? (sim/não)")
                 set_user_state(from_number, 'awaiting_meal_confirmation', context_data=meal_context)
-        return str(resp) # <-- MUDANÇA: Retorna imediatamente
-
+    
     elif intent == 'definir_meta':
         goal_type = 'calorie_intake'
         goal_value = entities.get('goal_value')
         if goal_value:
              try:
                 set_goal(from_number, goal_type, float(goal_value))
-                msg.body(f"✅ Meta de {float(goal_value):.0f} kcal diárias definida com sucesso!")
+                resp.message(f"✅ Meta de {float(goal_value):.0f} kcal diárias definida com sucesso!")
              except (ValueError, TypeError):
-                msg.body("Valor inválido para a meta.")
+                resp.message("Valor inválido para a meta.")
         else:
-            msg.body("Não entendi o valor da meta. Diga, por exemplo, 'Definir meta 2000'.")
-        return str(resp) # <-- MUDANÇA: Retorna imediatamente
+            resp.message("Não entendi o valor da meta. Diga, por exemplo, 'Definir meta 2000'.")
             
-    # ... (ADICIONE OS RETURNS PARA TODAS AS SUAS OUTRAS INTENÇÕES AQUI) ...
-    # Exemplo:
     elif intent == 'registrar_peso':
-        # ... sua lógica para registrar peso ...
-        msg.body("Peso registrado!") # Exemplo
-        return str(resp)
+        weight = entities.get('weight_value')
+        if weight:
+            try:
+                add_weight_entry(from_number, float(weight))
+                resp.message(f"Peso de {float(weight)} kg registrado com sucesso!")
+            except ValueError:
+                resp.message("Formato de peso inválido. Por favor, use um número (ex: 75.5).")
+        else:
+            resp.message("Não consegui encontrar o valor do peso. Por favor, diga seu peso (ex: 'Meu peso é 75.5').")
 
-    # Fallback final se nenhuma intenção for correspondida
-    msg.body("Desculpe, não entendi o que você quis dizer.")
+    # ... (ADICIONE A LÓGICA PARA SUAS OUTRAS INTENÇÕES AQUI, SEMPRE MODIFICANDO `resp`) ...
+    
+    else: # Fallback final se nenhuma intenção for correspondida
+        resp.message("Desculpe, não entendi o que você quis dizer.")
+
     return str(resp)
 
 if __name__ == "__main__":
