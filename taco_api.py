@@ -11,6 +11,9 @@ def get_db_connection():
     """Retorna uma conexão com o banco de dados PostgreSQL."""
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL não está configurada! Não é possível conectar ao PostgreSQL.")
+    
+    # O psycopg2 precisa do SSLMode 'require' ou 'no-verify' para conexões externas
+    # Railway geralmente pede require
     return psycopg2.connect(DATABASE_URL + "?sslmode=require") # Adicionado sslmode=require
 
 def get_taco_nutrition(query):
@@ -25,7 +28,7 @@ def get_taco_nutrition(query):
     quantidade_g = 100.0 
 
     match_quantity = re.search(r'(\d+)\s*(g|gramas|ml|litro|xicara|copo)?\s*(de|do|da|dos|das)?\s*(.+)', query, re.IGNORECASE)
-
+    
     if match_quantity:
         value = float(match_quantity.group(1))
         unit = match_quantity.group(2).lower() if match_quantity.group(2) else 'g'
@@ -64,7 +67,7 @@ def get_taco_nutrition(query):
         return s
 
     alimento_base_normalized = normalize_string(alimento_base)
-
+    
     search_queries = [
         alimento_base.replace(",", "").strip(), 
         alimento_base.strip(), 
@@ -74,7 +77,7 @@ def get_taco_nutrition(query):
         f"%{alimento_base_normalized}%", 
         f"%{alimento_base_normalized.replace(' ', '%')}%" 
     ]
-
+    
     generic_alimento_base = alimento_base.split(',')[0].strip()
     if generic_alimento_base.lower() != alimento_base.lower() and generic_alimento_base not in search_queries:
         search_queries.append(generic_alimento_base)
@@ -89,20 +92,18 @@ def get_taco_nutrition(query):
         if normalized_term_for_set not in seen_terms and term.strip():
             final_search_terms.append(term.strip())
             seen_terms.add(normalized_term_for_set)
-
+    
     final_search_terms.sort(key=lambda x: (
         x.count('%'), 
         -len(x)       
     ))
 
     for term in final_search_terms:
-        # Para PostgreSQL, use ILIKE para busca case-insensitive e %s para parâmetros
         cursor.execute("SELECT * FROM taco_foods WHERE alimento ILIKE %s LIMIT 1", (term,)) 
-        # Como _fetch_one_as_dict está no database.py, vamos adaptar ou usar row[idx]
-        row = cursor.fetchone()
+        row = cursor.fetchone() 
         if row:
             desc = cursor.description
-            found_food = {col[0]: row[idx] for idx, col in enumerate(desc)}
+            found_food = {col[0]: row[idx] for idx, col in enumerate(desc)} 
             print(f"DEBUG TACO: Encontrado '{found_food['alimento']}' para busca '{term}'.")
             break
 
@@ -133,29 +134,30 @@ def get_taco_nutrition(query):
         conn.close()
         return None
 
-# Teste (opcional)
-if __name__ == '__main__':
-    # Certifique-se que DATABASE_URL está no seu .env local
-    print("--- Testando Taco API Localmente (PostgreSQL) ---")
-
-    test_queries = [
-        "arroz, integral, cozido",
-        "100g de arroz",
-        "feijão, cozido",
-        "50g de feijao",
-        "batata, cozida",
-        "100g de batata",
-        "frango, filé, grelhado",
-        "cafe, infuso"
-    ]
-
-    for query in test_queries:
-        print(f"\nBuscando: '{query}'")
-        try:
-            info = get_taco_nutrition(query)
-            if info:
-                print(f"  Encontrado: {info['foods_listed']} | Cal: {info['calories']:.0f} | Carb: {info['carbohydrates']:.0f} | Prot: {info['proteins']:.0f} | Gord: {info['fats']:.0f}")
-            else:
-                print(f"  Não encontrado para '{query}'.")
-        except Exception as e:
-            print(f"  ERRO ao buscar '{query}': {e}")
+    # Teste (opcional)
+    if __name__ == '__main__':
+        # Este teste pressupõe que você já rodou populate_pg_taco.py localmente
+        # para popular o seu banco de dados PostgreSQL do Railway.
+        print("--- Testando Taco API Localmente (PostgreSQL) ---")
+        
+        test_queries = [
+            "arroz, integral, cozido",
+            "100g de arroz",
+            "feijão, cozido",
+            "50g de feijao",
+            "batata, cozida",
+            "100g de batata",
+            "frango, filé, grelhado",
+            "cafe, infuso"
+        ]
+        
+        for query in test_queries:
+            print(f"\nBuscando: '{query}'")
+            try:
+                info = get_taco_nutrition(query)
+                if info:
+                    print(f"  Encontrado: {info['foods_listed']} | Cal: {info['calories']:.0f} | Carb: {info['carbohydrates']:.0f} | Prot: {info['proteins']:.0f} | Gord: {info['fats']:.0f}")
+                else:
+                    print(f"  Não encontrado para '{query}'.")
+            except Exception as e:
+                print(f"  ERRO ao buscar '{query}': {e}")
