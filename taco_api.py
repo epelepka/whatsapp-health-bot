@@ -1,3 +1,10 @@
+
+from database import get_db_connection
+import psycopg2
+from psycopg2 import sql
+import os
+import re
+
 def get_taco_nutrition(query):
     """
     Busca informações nutricionais de um alimento na tabela TACO (PostgreSQL).
