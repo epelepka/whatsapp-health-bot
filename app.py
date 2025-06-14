@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 import re
 from datetime import datetime, date, time
 import json 
+from flask import request, abort
+from twilio.request_validator import RequestValidator
+import os
 
 print("1. Imports carregados.") 
 
@@ -139,9 +142,28 @@ def _get_base_food_name_from_query_string(query_str):
     return query_str.strip().lower() # Retorna a query original em minúsculas como fallback
 
 @app.route("/webhook", methods=['POST'])
-def whatsapp_webhook():
+def webhook():
+    # Valida se a requisição veio mesmo do Twilio
+    validator = RequestValidator(os.environ.get('TWILIO_AUTH_TOKEN'))
+    
+    # Pega a URL completa e os parâmetros da requisição
+    url = request.url
+    post_vars = request.form.to_dict()
+    
+    # Pega a assinatura do cabeçalho
+    twilio_signature = request.headers.get('X-Twilio-Signature', '')
+
+    if not validator.validate(url, post_vars, twilio_signature):
+        return abort(403) # Requisição inválida, encerra.
+
+    # Se a validação passar, o código continua normalmente
+    msg_body = request.form.get('Body', '').strip()
+    response_text = generate_response(msg_body)
+    
     incoming_msg = request.values.get('Body', '') 
     from_number = request.values.get('From', '') 
+    user_phone_number = request.form.get('From')
+    msg_body = request.form.get('Body', '').strip()
     user_id = get_or_create_user(from_number) # Obtém o ID do usuário para o estado
 
     resp = MessagingResponse()
