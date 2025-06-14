@@ -191,7 +191,7 @@ def webhook():
 
     # Se a validação passar, o código continua normalmente
     msg_body = request.form.get('Body', '').strip()
-    response_text = generate_response(msg_body)
+   
 
     incoming_msg = request.values.get('Body', '') 
     from_number = request.values.get('From', '') 
