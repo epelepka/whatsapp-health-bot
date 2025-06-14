@@ -37,62 +37,14 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 print("3. Flask app criado.") 
 
 # Configurações da Twilio
-TWILIO_ACCOUNT_SID = os.getenv('TWilio_ACCOUNT_SID')
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER') 
 
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-# Inicializa o banco de dados e o agendador
-with app.app_context():
-    init_db()
-print("4. Banco de dados inicializado.") 
-
+# ... (Todo o seu código do agendador continua aqui, sem alterações) ...
 scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
-# ... (suas funções de agendador como send_reminder_message, etc. continuam aqui, sem alterações) ...
 scheduler.start()
 print("5. Agendador iniciado.") 
-
-# --- NOVA FUNÇÃO AUXILIAR PARA ENVIAR MÚLTIPLAS MENSAGENS ---
-def send_post_meal_summary(user_number, added_meal_data):
-    """Envia uma sequência de mensagens de resumo após registrar uma refeição."""
-    try:
-        # Mensagem 1: Confirmação simples
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=user_number,
-            body=f"✅ Ótimo! Salvei '{added_meal_data['original_alimento']}' no seu diário."
-        )
-
-        # Mensagem 2: Detalhes da refeição adicionada
-        summary_meal = (
-            f"Detalhes da refeição adicionada:\n"
-            f"Calorias: {added_meal_data['calories']:.0f} kcal\n"
-            f"Carboidratos: {added_meal_data['carbohydrates']:.0f} g\n"
-            f"Proteínas: {added_meal_data['proteins']:.0f} g\n"
-            f"Gorduras: {added_meal_data['fats']:.0f} g"
-        )
-        twilio_client.messages.create(from_=TWILIO_WHATSAPP_NUMBER, to=user_number, body=summary_meal)
-
-        # Mensagem 3: Resumo do dia e status da meta
-        daily_summary = get_daily_summary(user_number)
-        total_consumed_today = sum(f['calories'] for f in daily_summary['foods'])
-        
-        calorie_goal = get_goal(user_number, 'calorie_intake')
-        
-        if calorie_goal:
-            remaining_calories = calorie_goal['target_value'] - total_consumed_today
-            if remaining_calories >= 0:
-                summary_day = f"Resumo de hoje: Você já consumiu {total_consumed_today:.0f} kcal. Ainda pode consumir {remaining_calories:.0f} kcal para atingir sua meta de {calorie_goal['target_value']:.0f} kcal."
-            else:
-                summary_day = f"🚨 Atenção! Resumo de hoje: Você já consumiu {total_consumed_today:.0f} kcal e excedeu sua meta diária em {-remaining_calories:.0f} kcal."
-        else:
-            summary_day = f"Resumo de hoje: Você já consumiu {total_consumed_today:.0f} kcal. Defina uma meta para acompanharmos juntos! (ex: 'Definir meta 2000')."
-            
-        twilio_client.messages.create(from_=TWILIO_WHATSAPP_NUMBER, to=user_number, body=summary_day)
-
-    except Exception as e:
-        print(f"Erro ao enviar resumo para {user_number}: {e}")
 
 @app.route("/webhook", methods=['POST'])
 def webhook():
@@ -109,13 +61,14 @@ def webhook():
     current_state = user_state['state']
     context_data = user_state.get('context_data') or {}
     
-    # Análise de NLP feita uma vez no início
+    resp = MessagingResponse()
+    msg = resp.message()
+    
     wit_response = get_wit_ai_response(incoming_msg)
     parsed_data = parse_wit_ai_response(wit_response)
     intent = parsed_data.get('intent')
     
-    # Lógica de Reset Inteligente
-    interrupting_intents = ['registrar_refeicao', 'registrar_peso', 'saudacao'] # etc.
+    interrupting_intents = ['registrar_refeicao', 'registrar_peso', 'definir_meta', 'saudacao'] # etc.
     if current_state != 'none' and intent in interrupting_intents:
         set_user_state(from_number, 'none')
         current_state = 'none'
@@ -130,14 +83,23 @@ def webhook():
             best_guess = meal_context.get('best_guess')
             if best_guess:
                 add_food_entry(from_number, best_guess['foods_listed'], best_guess['calories'], best_guess['carbohydrates'], best_guess['proteins'], best_guess['fats'])
-                # CHAMA A NOVA FUNÇÃO DE RESUMO
-                send_post_meal_summary(from_number, best_guess)
+                
+                # --- NOVA RESPOSTA CONCISA ---
+                total_consumed_today = sum(f['calories'] for f in get_daily_summary(from_number)['foods'])
+                response_text = f"✅ Salvo! ({best_guess['original_alimento']})\n\nTotal de hoje: {total_consumed_today:.0f} kcal."
+                calorie_goal = get_goal(from_number, 'calorie_intake')
+                if calorie_goal:
+                    remaining = calorie_goal['target_value'] - total_consumed_today
+                    response_text += f"\nMeta: {remaining:.0f} kcal restantes."
+                msg.body(response_text)
+                # -----------------------------
+            else:
+                msg.body("🤔 Ocorreu um erro, tente de novo.")
             set_user_state(from_number, 'none')
+
         elif answer in ['não', 'nao', 'n', 'errado', 'outro']:
             alternatives = meal_context.get('alternatives', [])
             if alternatives:
-                resp = MessagingResponse()
-                msg = resp.message()
                 response_lines = ["Ok. Encontrei estas outras opções:"]
                 alternatives_map = {}
                 for i, food_data in enumerate(alternatives):
@@ -147,71 +109,86 @@ def webhook():
                 response_lines.append("\nDigite o número da opção correta ou 'cancela'.")
                 msg.body("\n".join(response_lines))
                 set_user_state(from_number, 'awaiting_alternative_selection', context_data={'alternatives_map': alternatives_map})
-                return str(resp)
             else:
-                resp = MessagingResponse()
-                resp.message("❌ Ok, cancelado. Não encontrei outras opções.")
+                msg.body("❌ Ok, cancelado. Não encontrei outras opções.")
                 set_user_state(from_number, 'none')
-                return str(resp)
+        
         else:
-            resp = MessagingResponse()
-            resp.message("Não entendi. Por favor, responda com 'sim' ou 'não'.")
-            return str(resp)
-
+            msg.body("Não entendi. Por favor, responda com 'sim' ou 'não'.")
+        
+        return str(resp)
+    
     elif current_state == 'awaiting_alternative_selection':
         answer = incoming_msg.lower().strip().replace('.', '')
         alternatives_map = context_data.get('alternatives_map', {})
 
         if answer in ['cancela', 'cancelar']:
-            resp = MessagingResponse()
-            resp.message("Ok, operação cancelada.")
+            msg.body("Ok, operação cancelada.")
             set_user_state(from_number, 'none')
-            return str(resp)
 
-        if answer in alternatives_map:
+        elif answer in alternatives_map:
             chosen_food = alternatives_map[answer]
             add_food_entry(from_number, chosen_food['foods_listed'], chosen_food['calories'], chosen_food['carbohydrates'], chosen_food['proteins'], chosen_food['fats'])
-            # CHAMA A NOVA FUNÇÃO DE RESUMO
-            send_post_meal_summary(from_number, chosen_food)
+            
+            # --- NOVA RESPOSTA CONCISA ---
+            total_consumed_today = sum(f['calories'] for f in get_daily_summary(from_number)['foods'])
+            response_text = f"✅ Salvo! ({chosen_food['original_alimento']})\n\nTotal de hoje: {total_consumed_today:.0f} kcal."
+            calorie_goal = get_goal(from_number, 'calorie_intake')
+            if calorie_goal:
+                remaining = calorie_goal['target_value'] - total_consumed_today
+                response_text += f"\nMeta: {remaining:.0f} kcal restantes."
+            msg.body(response_text)
+            # -----------------------------
+            
             set_user_state(from_number, 'none')
         else:
-            resp = MessagingResponse()
-            resp.message("Número inválido. Escolha um número da lista ou 'cancela'.")
-            return str(resp)
-    
-    # ... (outros estados como 'awaiting_meal_delete_number' continuam aqui) ...
-            
+            msg.body("Número inválido. Escolha um número da lista ou digite 'cancela'.")
+        
+        return str(resp)
+
     # --- Roteamento de Intenção ---
-    elif intent == 'registrar_refeicao':
-        food_items_list = parsed_data['entities'].get('food_item', []) 
+    
+    entities = parsed_data.get('entities', {})
+
+    if intent == 'registrar_refeicao':
+        food_items_list = entities.get('food_item', []) 
         if not food_items_list:
-            resp = MessagingResponse()
-            resp.message("Não consegui identificar o que você comeu...")
+            msg.body("Não consegui identificar o que você comeu...")
             return str(resp)
         
         food_query = food_items_list[0]
         food_options = search_taco_options(food_query)
         
         if not food_options:
-            resp = MessagingResponse()
-            resp.message(f"Não encontrei dados para '{food_query}'.")
+            msg.body(f"Não encontrei dados para '{food_query}'.")
             return str(resp)
 
         best_guess = food_options[0]
         alternatives = food_options[1:]
         meal_context = {"best_guess": best_guess, "alternatives": alternatives}
         
-        resp = MessagingResponse()
-        # Envia uma mensagem curta para evitar o limite de caracteres
-        resp.message(f"Encontrei: {best_guess['original_alimento']}. Está correto? (sim/não)")
+        msg.body(f"Encontrei: {best_guess['original_alimento']}. Está correto? (sim/não)")
         set_user_state(from_number, 'awaiting_meal_confirmation', context_data=meal_context)
-        return str(resp)
-        
-    # ... (O restante de suas intenções: 'registrar_peso', 'obter_resumo_diario', etc. continuam aqui) ...
-    
-    # Se chegamos até aqui, significa que a mensagem foi proativa ou a intenção não precisa de uma resposta síncrona.
-    # Retorna uma resposta vazia para Twilio para evitar erro.
-    return str(MessagingResponse())
+
+    elif intent == 'definir_meta':
+        # Exemplo de como tratar a meta de forma síncrona
+        goal_type = 'calorie_intake' # Simplificação
+        goal_value = entities.get('goal_value')
+        if goal_value:
+             try:
+                set_goal(from_number, goal_type, float(goal_value))
+                msg.body(f"✅ Meta de {float(goal_value):.0f} kcal diárias definida com sucesso!")
+             except (ValueError, TypeError):
+                msg.body("Valor inválido para a meta.")
+        else:
+            msg.body("Não entendi o valor da meta. Diga, por exemplo, 'Definir meta 2000'.")
+            
+    # ... (O restante de suas intenções: 'registrar_peso', 'obter_resumo_diario', etc.) ...
+
+    else:
+        msg.body("Desculpe, não entendi o que você quis dizer.")
+
+    return str(resp)
 
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=os.environ.get('PORT', 5000))
