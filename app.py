@@ -51,7 +51,7 @@ with app.app_context():
     init_db()
     print("4. Banco de dados inicializado.") 
 
-# --- Funções do Agendador (mesma lógica de antes) ---
+# --- Funções do Agendador ---
 def send_reminder_message(whatsapp_number, reminder_text):
     try:
         twilio_client.messages.create(from_=TWILIO_WHATSAPP_NUMBER, to=whatsapp_number, body=f"🔔 Lembrete: {reminder_text}")
@@ -59,7 +59,6 @@ def send_reminder_message(whatsapp_number, reminder_text):
         print(f"Erro ao enviar lembrete: {e}")
 
 # ... (outras funções do agendador continuam aqui) ...
-
 scheduler = BackgroundScheduler()
 scheduler.start()
 print("5. Agendador iniciado.") 
@@ -71,7 +70,7 @@ def webhook():
     if not validator.validate(request.url, request.form.to_dict(), request.headers.get('X-Twilio-Signature', '')):
         return abort(403)
     
-    # --- Processamento da Mensagem ---
+    # --- Processamento Inicial da Mensagem ---
     incoming_msg = request.values.get('Body', '').strip() 
     from_number = request.values.get('From', '') 
     
@@ -85,12 +84,16 @@ def webhook():
     resp = MessagingResponse()
     msg = resp.message()
     
-    # --- MUDANÇA PRINCIPAL: LÓGICA DE RESET INTELIGENTE ---
-    parsed_data = parse_wit_ai_response(incoming_msg)
+    # --- Lógica de Reset Inteligente (CORRIGIDA) ---
+    
+    # Faz a análise de NLP APENAS UMA VEZ no início
+    wit_response = get_wit_ai_response(incoming_msg)
+    parsed_data = parse_wit_ai_response(wit_response)
     intent = parsed_data.get('intent')
     entities = parsed_data.get('entities', {})
 
-    # Lista de intenções que indicam um novo comando, cancelando qualquer conversa anterior
+    print(f"Intenção detectada: {intent}, Entidades: {entities}")
+
     interrupting_intents = [
         'registrar_refeicao', 'registrar_peso', 'registrar_exercicio',
         'obter_resumo_diario', 'listar_refeicoes', 'limpar_refeicoes_dia',
@@ -98,11 +101,10 @@ def webhook():
         'desativar_lembrete', 'saudacao'
     ]
 
-    # Se o usuário está em um estado de espera, mas envia um novo comando, resete o estado.
     if current_state != 'none' and intent in interrupting_intents:
         print(f"DEBUG: Usuário interrompeu o estado '{current_state}' com um novo comando ('{intent}'). Resetando estado.")
         set_user_state(from_number, 'none')
-        current_state = 'none' # Atualiza a variável local também
+        current_state = 'none'
 
     # --- Lógica de Máquina de Estados ---
     if current_state == 'awaiting_meal_confirmation':
@@ -158,9 +160,8 @@ def webhook():
         
         return str(resp)
 
-    # --- Roteamento de Intenção (Agora só roda se não estiver em um estado) ---
-    print(f"Intenção detectada: {intent}, Entidades: {entities}")
-
+    # --- Roteamento de Intenção (Usa a intenção já detectada) ---
+    
     if intent == 'registrar_refeicao':
         food_items_list = entities.get('food_item', []) 
         if not food_items_list:
@@ -179,14 +180,13 @@ def webhook():
 
         meal_context = {"best_guess": best_guess, "alternatives": alternatives}
         
-        # USA A VERSÃO CURTA DA MENSAGEM PARA EVITAR PROBLEMAS DE LIMITE
         msg.body(f"Encontrei: {best_guess['original_alimento']}. Está correto? (sim/não)")
 
         set_user_state(from_number, 'awaiting_meal_confirmation', context_data=meal_context)
-
+    
     # ... (O restante de suas intenções: 'registrar_peso', 'obter_resumo_diario', etc.) ...
 
-    else: # Intenção não reconhecida
+    else: # Intenção não reconhecida ou nenhuma intenção
         msg.body("Desculpe, não entendi o que você quis dizer.")
 
     return str(resp)
